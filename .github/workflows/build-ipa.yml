@@ -5,6 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# The release upload previously failed with 403 even after successfully building the IPA.
+permissions:
+  contents: write
+
 jobs:
   build-ipa:
     runs-on: macos-26
