@@ -28,14 +28,21 @@ static uint8_t chunk[VCHUNK_HDR + MAX_CHUNK];
 static uint32_t winStart, winBytes, winFrames, lastIdr;
 static volatile uint32_t statKbps, statIdrMs, statAt;
 static volatile float statFps;
+static uint32_t lastAccepted, oversized;
+static uint32_t txGen = UINT32_MAX;
+static int nextAu;
+static vchunk pending;
+static bool pendingAu;
+static const uint32_t SNAP_BUDGET_MS = 20000;
 
 // One access unit as notifies. A failed chunk still consumes its seq, so the app sees a gap.
-static bool sendAu(const uint8_t *p, size_t n, uint8_t flags, uint32_t ts) {
+static bool sendAu(const uint8_t *p, size_t n, uint8_t flags, uint32_t ts, uint32_t started) {
   size_t room = min(ble_video_room(), MAX_CHUNK);
   if (room < 5) return false;
   vchunk c;
   vchunk_begin(&c, p, n, flags, ts);
   for (size_t len; (len = vchunk_next(&c, chunk, room, seq)) > 0;) {
+    if (millis() - started >= SNAP_BUDGET_MS) return false;
     bool ok = ble_video_send(chunk, len);
     seq++;
     if (!ok) return false;
@@ -70,19 +77,34 @@ static bool snapshot(uint32_t *gen, int *n, uint8_t *cfg, size_t *cfg_len, uint3
 static String doSnap() {
   static uint8_t cfg[GOP_CFG_MAX];
   if (!ble_video_room()) return "err video not subscribed";
+  const uint32_t started = millis();
   for (int attempt = 0; attempt < 3; attempt++) {
     uint32_t gen, cfg_ts;
     size_t cfg_len;
     int n;
-    if (!snapshot(&gen, &n, cfg, &cfg_len, &cfg_ts)) return "err no video (start screen mirroring)";
-    if (!sendAu(cfg, cfg_len, VF_CONFIG | VF_SNAP, cfg_ts)) return "err ble send failed";
+    if (!snapshot(&gen, &n, cfg, &cfg_len, &cfg_ts)) {
+      VideoStats s = video_stats();
+      return s.overflows && s.wait_idr
+        ? "err video cache overflow; waiting keyframe (restart screen mirroring)"
+        : "err no decodable video; waiting keyframe (start screen mirroring)";
+    }
+    if (!sendAu(cfg, cfg_len, VF_CONFIG | VF_SNAP, cfg_ts, started))
+      return "err video transfer stalled or exceeded 20s (restart screen mirroring)";
     bool complete = true;
     for (int i = 0; i < n && complete; i++) {
       gop_au au;
       complete = copyAu(gen, i, &au);
-      if (complete && !sendAu(scratch, au.len, VF_SNAP | (au.idr ? VF_IDR : 0), au.ts)) return "err ble send failed";
+      if (complete && !sendAu(scratch, au.len, VF_SNAP | (au.idr ? VF_IDR : 0), au.ts, started))
+        return "err video transfer stalled or exceeded 20s (restart screen mirroring)";
     }
-    if (complete) return "ok";  // else a new IDR replaced the GOP mid-send: start over with it
+    if (complete) {
+      // The snapshot just sent the decoder this generation through n: do not replay the same
+      // entire GOP again when continuous delivery resumes.
+      txGen = gen;
+      nextAu = n;
+      return "ok";
+    }  // else a new IDR replaced the GOP mid-send: start over with it
+    if (millis() - started >= SNAP_BUDGET_MS) return "err video transfer exceeded 20s";
   }
   return "err video changing too fast";
 }
@@ -109,30 +131,56 @@ static String doBench(uint32_t kb) {
 // can't be skipped: each needs the one before, and the next IDR may be minutes away). After a failed
 // send, start over from the GOP's IDR.
 static void streamStep() {
-  static uint32_t txGen = UINT32_MAX;
-  static int next;
   static uint8_t cfg[GOP_CFG_MAX];
   if (!streaming || !ble_video_room()) {
     txGen = UINT32_MAX;  // resend config + whole GOP when streaming resumes
+    pendingAu = false;
     return;
   }
   uint32_t gen, cfg_ts;
   size_t cfg_len;
   int n;
-  if (!snapshot(&gen, &n, cfg, &cfg_len, &cfg_ts)) return;
+  if (!snapshot(&gen, &n, cfg, &cfg_len, &cfg_ts)) {
+    txGen = UINT32_MAX;
+    pendingAu = false;
+    return;
+  }
   if (gen != txGen) {
     txGen = gen;
-    next = 0;
-    if (!sendAu(cfg, cfg_len, VF_CONFIG, cfg_ts)) { txGen = UINT32_MAX; return; }
+    nextAu = 0;
+    // scratch also holds config: unlike a loop-local cfg it survives across task iterations.
+    memcpy(scratch, cfg, cfg_len);
+    vchunk_begin(&pending, scratch, cfg_len, VF_CONFIG, cfg_ts);
+    pendingAu = true;
   }
-  for (gop_au au; next < n && copyAu(gen, next, &au); next++)
-    if (!sendAu(scratch, au.len, au.idr ? VF_IDR : 0, au.ts)) { txGen = UINT32_MAX; return; }
+  if (!pendingAu) {
+    if (nextAu >= n) return;
+    gop_au au;
+    if (!copyAu(gen, nextAu, &au)) { txGen = UINT32_MAX; return; }
+    nextAu++;
+    vchunk_begin(&pending, scratch, au.len, au.idr ? VF_IDR : 0, au.ts);
+    pendingAu = true;
+  }
+  // Yield after four chunks, even mid-AU. Snapshot/control requests no longer wait for an
+  // entire historical GOP (previously ~90s). Never interleave two AUs on the BLE channel.
+  const size_t room = min(ble_video_room(), MAX_CHUNK);
+  if (room < 5) return;
+  for (int i = 0; i < 4; i++) {
+    size_t len = vchunk_next(&pending, chunk, room, seq);
+    if (!len) { pendingAu = false; break; }
+    bool ok = ble_video_send(chunk, len);
+    seq++;
+    if (!ok) { txGen = UINT32_MAX; pendingAu = false; break; }
+  }
 }
 
 static void videoTask(void *) {
   for (;;) {
     Req r;
     if (xQueueReceive(reqs, &r, 0) == pdTRUE) {
+      // A snapshot starts with CONFIG/START and deliberately replaces an unfinished live AU.
+      pendingAu = false;
+      txGen = UINT32_MAX;
       String reply = String(r.id) + " " + (r.bench ? doBench(r.kb) : doSnap());
 #if DEBUG_SERIAL
       Serial.println("video: " + reply);  // the reply only goes over BLE; mirror it for serial-driven tests
@@ -140,7 +188,9 @@ static void videoTask(void *) {
       ble_reply(reply);
     }
     streamStep();
-    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(20));
+    // Do not throttle backlog to four packets / 20ms; keep yielding to the scheduler.
+    if (pendingAu) vTaskDelay(1);
+    else ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(20));
   }
 }
 
@@ -177,7 +227,16 @@ void video_on_au(const uint8_t *au, size_t len, bool idr) {
     winStart = now;
   }
   xSemaphoreTake(lock, portMAX_DELAY);
-  gop_push(&gop, au, len, idr, now);
+  // An AU larger than the transmitter scratch must not wedge delivery at this index forever.
+  if (len > SCRATCH_CAP) {
+    oversized++;
+    gop.used = 0;
+    gop.n = 0;
+    gop.gen++;
+    gop.wait_idr = true;
+  } else if (gop_push(&gop, au, len, idr, now) >= 0) {
+    lastAccepted = now;
+  }
   xSemaphoreGive(lock);
   xTaskNotifyGive(task);
 }
@@ -197,6 +256,10 @@ VideoStats video_stats() {
   bool fresh = millis() - statAt < 3000;  // mirroring stopped: report zeros, not stale numbers
   xSemaphoreTake(lock, portMAX_DELAY);
   uint32_t gopBytes = gop.used;
+  uint32_t overflow = gop.overflows, large = oversized;
+  bool waiting = gop.wait_idr;
+  uint32_t age = lastAccepted ? millis() - lastAccepted : UINT32_MAX;
   xSemaphoreGive(lock);
-  return {fresh ? statKbps : 0, statIdrMs, gopBytes, fresh ? statFps : 0};
+  return {fresh ? statKbps : 0, statIdrMs, gopBytes, fresh && !waiting ? statFps : 0,
+          overflow, age, large, waiting};
 }

@@ -3,6 +3,34 @@ import XCTest
 
 /// `video` chunk reassembly (docs/ble-protocol.md).
 final class VideoTests: XCTestCase {
+    @MainActor func testReconnectAndLinkLossDoNotExposeAnOldFrameAsLive() {
+        let feed = VideoFeed()
+        let device = FakeDevice()
+        feed.device = device
+        feed.mirroring = true
+        feed.show(Data([0xff, 0xd8]), width: 480, height: 1040)
+        XCTAssertTrue(feed.live)
+        feed.linkLost()
+        XCTAssertFalse(feed.live)
+        feed.resetStream()
+        XCTAssertNil(feed.frame)
+        XCTAssertEqual(feed.capturedAt, 0)
+        XCTAssertFalse(feed.live)
+    }
+
+    @MainActor func testSnapAcknowledgementWithoutDecodedImageFails() async {
+        let feed = VideoFeed()
+        let device = FakeDevice()
+        feed.device = device
+        feed.show(Data([0xff, 0xd8]), width: 480, height: 1040)
+        do {
+            try await feed.snap()
+            XCTFail("a command ACK must not pass off the old image as a new snapshot")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("没有解码出新的画面"))
+        }
+    }
+
     typealias F = VideoAssembler.Flags
 
     func chunk(_ seq: UInt16, _ flags: F, _ payload: [UInt8], ms: UInt32? = nil) -> Data {

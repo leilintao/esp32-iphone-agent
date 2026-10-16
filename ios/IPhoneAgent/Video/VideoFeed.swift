@@ -62,6 +62,7 @@ extension ScreenSource {
     private(set) var capturedAt = 0.0
     /// A decode error or a lost chunk since the last good frame: the shown frame is stale until the next IDR.
     private(set) var broken = false
+    private var snapRevision = 0
     private var clockOffset: Double?  // local s − board s, the smallest seen (≈ the link latency)
     var mirroring = false  // board status says ap == streaming
     var metrics: Metrics?
@@ -82,7 +83,13 @@ extension ScreenSource {
         }
     }
 
-    var live: Bool { mirroring && frame != nil && (device?.connected ?? false) }
+    var live: Bool {
+        mirroring && usable(maxAge: 10) && (device?.connected ?? false) && metrics?.board?.vwait != 1
+    }
+
+    private func usable(maxAge: Double) -> Bool {
+        frame != nil && !broken && now() - capturedAt < maxAge
+    }
 
     /// Frame width / height (portrait iPhone as a fallback).
     var aspect: Double { size.width > 0 && size.height > 0 ? size.width / size.height : 9 / 19.5 }
@@ -100,7 +107,15 @@ extension ScreenSource {
     }
 
     /// The link (re)connected: chunk numbering starts over.
-    func resetStream() { assembler.reset(); clockOffset = nil }  // the board may have rebooted: its clock too
+    func resetStream() {
+        assembler.reset()
+        clockOffset = nil
+        frame = nil
+        updated = 0
+        capturedAt = 0
+        broken = true
+        streamOn = false
+    }
 
     /// A board timestamp (status `up`, or a streamed unit) just arrived: keep the smallest offset.
     func boardClock(ms: Int) {
@@ -116,6 +131,7 @@ extension ScreenSource {
 
     private func publish(_ f: H264Decoder.Frame) {
         frame = f.jpeg
+        if f.unit.snap { snapRevision += 1 }
         updated = now()
         capturedAt = clockOffset.map { Double(f.unit.boardMs) / 1000 + $0 } ?? updated
         broken = false
@@ -128,28 +144,29 @@ extension ScreenSource {
     /// The app asked the board to forward the stream (`stream on`).
     private(set) var streamOn = false
 
-    /// Seconds a snap may take: the buffered GOP over the measured BLE rate, doubled, at least 8 s.
+    /// Firmware spends at most 20s transferring a snap. Allow queue/chunk latency and decode delivery;
+    /// a shorter client deadline would abandon a request while the board was still sending it.
     var snapTimeout: Double {
-        let gopBytes = Double(metrics?.board?.gop ?? 0)
-        let kbps = max(metrics?.bleKbps ?? 0, metrics?.board?.ble?.kbps ?? 0, 40)
-        return max(8, gopBytes * 8 / 1000 / kbps * 2 + 3)
+        30
     }
 
     /// A current frame for the model. While the board streams, the live stream has it (an IDR comes every
     /// ~2 s): use a frame younger than `maxAge`, or wait for the next one. Snap only as a fallback, retried
-    /// once with a longer timeout. Returns where the frame came from, for the log.
+    /// only once, with a bounded timeout. Returns where the frame came from, for the log.
     @discardableResult
     func currentFrame(maxAge: Double = 1, wait: Double = 3) async throws -> String {
+        if metrics?.board?.vwait == 1 {
+            throw DeviceError(message: "视频正在等待关键帧（缓存溢出次数：\(metrics?.board?.vover ?? 0)），请停止并重新开启屏幕镜像")
+        }
         if streamOn && mirroring {
-            if frame != nil && now() - updated < maxAge { return "live" }
-            if await fresh(since: now() - maxAge, timeout: wait) != nil { return "live (waited)" }
+            if usable(maxAge: maxAge) { return "live" }
+            if await fresh(since: now() - maxAge, timeout: wait) != nil, usable(maxAge: maxAge) {
+                return "live (waited)"
+            }
         }
-        do {
-            try await snap()
-        } catch is BoardTimeout {
-            DebugLog.write("snap timed out; retrying once with a longer timeout")
-            try await snap(timeout: snapTimeout * 1.5)
-        }
+        // A second request cannot cancel a timed-out first transfer on older firmware; it only
+        // adds another whole GOP to the backlog. Fail clearly instead of automatically doubling it.
+        try await snap()
         return "snap"
     }
 
@@ -158,6 +175,7 @@ extension ScreenSource {
     func snap(timeout: Double? = nil) async throws -> Double {
         guard let device else { throw DeviceError(message: "board not connected") }
         let started = now()
+        let revision = snapRevision
         if let channel = device as? CommandChannel {
             try await channel.send("snap", timeout: timeout ?? snapTimeout)
         } else {
@@ -165,7 +183,11 @@ extension ScreenSource {
         }
         await withCheckedContinuation { c in decoder.queue.async { c.resume() } }  // the GOP is decoded
         try? await Task.sleep(nanoseconds: 30_000_000)  // let the last frame reach the main queue
+        guard snapRevision > revision, frame != nil, !broken else {
+            throw DeviceError(message: "截图传输完成，但没有解码出新的画面；请重新开启屏幕镜像")
+        }
         let ms = (now() - started) * 1000
+        DebugLog.write(String(format: "frame: snap decoded; capture age %.2fs, transfer %.0fms", now() - capturedAt, ms))
         metrics?.snapLatency(ms)
         return ms
     }
@@ -212,5 +234,5 @@ extension ScreenSource {
     }
 
     /// The link dropped: the board forgets `stream on`.
-    func linkLost() { streamOn = false }
+    func linkLost() { streamOn = false; broken = true }
 }

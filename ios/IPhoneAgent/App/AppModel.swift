@@ -41,6 +41,8 @@ import UIKit
     var recoverySince = Date()
     @Published var takingOver = false
     @Published var departing = false  // the character's take-off before a run
+    @Published var starting = false  // includes calibration, departure and the first-frame wait
+    var startCancelled = false
     /// A banner on Home: the app could not leave by itself (swipe up), or the run waits while the app is in front.
     @Published var homeHint: String?
     var resumeAsked = 0.0  // when Continue was tapped in the app
@@ -176,9 +178,11 @@ import UIKit
     private func logStatus(_ s: BoardStatus) {
         let line = "board status: ap \(s.ap ?? "-") usb \(s.usb ?? "-") sta \(s.sta.map(String.init) ?? "-")"
             + " screen \(s.w.map(String.init) ?? "-")x\(s.h.map(String.init) ?? "-") rst \(s.rst ?? "-")"
+            + " video waitIDR \(s.vwait ?? -1) overflow \(s.vover ?? -1) oversized \(s.vlarge ?? -1)"
         guard line != lastStatus else { return }
         lastStatus = line
         DebugLog.write(line)
+        DebugLog.write("video: last accepted frame age \(s.vage ?? -1) ms; GOP \(s.gop ?? -1) bytes")
         if let up = s.up, up < 30_000 {  // a link drop that is really the board rebooting (crash, brownout, ...)
             DebugLog.write("board: booted \(up / 1000) s ago (reset: \(s.rst ?? "?"), heap \((s.heap ?? 0) / 1024) KB)")
         }

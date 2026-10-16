@@ -15,6 +15,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Run iOS unit tests
+        run: |
+          SIM_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(v["udid"] for k,vs in d["devices"].items() if ".iOS-" in k for v in vs if v["name"].startswith("iPhone")))')
+          xcodebuild test \
+            -project IPhoneAgent.xcodeproj \
+            -scheme IPhoneAgent \
+            -destination "platform=iOS Simulator,id=$SIM_ID" \
+            -parallel-testing-enabled NO \
+            CODE_SIGNING_ALLOWED=NO
+
       - name: Archive App (Unsigned)
         run: |
           xcodebuild archive \

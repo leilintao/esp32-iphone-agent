@@ -12,17 +12,24 @@ extension AppModel {
 
     /// Start a task (or a saved intent: its checklist goes to the actor as hints).
     func run(_ task: String, intent: SavedTask? = nil) async {
-        guard !agent.running, !recorder.recording else { return }
+        guard !starting, !agent.running, !recorder.recording else {
+            DebugLog.write("start: ignored overlapping task request")
+            return
+        }
+        starting = true
+        startCancelled = false
+        defer { starting = false; departing = false }
         currentIntent = intent
         lastTask = task
         agent.hints = intent?.checklist ?? []
         departing = true
         try? await Task.sleep(nanoseconds: 800_000_000)  // "See you later" (DepartureOverlay)
         departing = false
+        guard !startCancelled, !Task.isCancelled else { return }
         await startAgent(task)
     }
 
-    func startAgent(_ task: String) async {
+    private func startAgent(_ task: String) async {
         if MockMode.on { return mockRun(task) }
         guard settings.isConfigured else {
             say(String(localized: "Set up the model in Settings first."))
@@ -32,6 +39,7 @@ extension AppModel {
             say(String(localized: "The pointer isn't calibrated yet."))
             return
         }
+        guard !startCancelled, !Task.isCancelled else { return }
         do {
             agent.actor = try await settings.client("actor")
             agent.planner = try await settings.client("planner")
@@ -39,6 +47,7 @@ extension AppModel {
             say("LLM: \(error.localizedDescription)")
             return
         }
+        guard !startCancelled, !Task.isCancelled else { return }
         // Start is tapped in this app, so: Live Activity, go Home, let the screen settle, THEN the first
         // frame for the planner. Each sub-step is timed in the log.
         let t0 = now()
@@ -48,6 +57,10 @@ extension AppModel {
         FrameMode.fallback = nil  // each run starts in the chosen mode
         let snapMode = FrameMode.current == .snap
         do {
+            func checkStart() throws {
+                if startCancelled || Task.isCancelled { throw CancellationError() }
+            }
+            try checkStart()
             if snapMode {
                 if feed.streamOn { try await feed.stream(false) }
                 mark("snap-per-step mode (stream off)")
@@ -55,6 +68,7 @@ extension AppModel {
                 try await feed.stream(true)  // the agent waits for the screen to settle: it needs every change
                 mark("stream on")
             }
+            try checkStart()
             backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "agent") { [weak self] in
                 self?.say("iOS is ending background time; BLE status keeps the run going")
                 self?.endBackgroundTask()
@@ -64,6 +78,7 @@ extension AppModel {
             let left = now()
             var away = await leaveApp()
             if !away { away = await askUserToLeave() }
+            try checkStart()
             guard away else {  // never let the agent start on its own app
                 throw DeviceError(message: String(localized: "ESP32 Agent is still on screen"))
             }
@@ -73,7 +88,9 @@ extension AppModel {
                 await feed.settled()
                 mark(changed ? "screen changed and settled" : "no screen change seen in 3 s; settled")
             }
+            try checkStart()
             mark("first frame: " + (try await feed.currentFrame()))
+            try checkStart()
             try agent.start(task, traceStarted: true)
             mark("agent started")
             say("started: \(task)")
@@ -93,6 +110,7 @@ extension AppModel {
 
     /// Emergency stop: cancel the agent and release the mouse button.
     func stopAgent() async {
+        if starting { startCancelled = true }
         answerHelp(.stop)
         mockJob?.cancel()
         agent.stop()

@@ -3,6 +3,33 @@ import XCTest
 
 /// Runs read back from trace folders (what the Runs list and the replay player show), and saved intents.
 @MainActor final class StoreTests: XCTestCase {
+    func testRapidStartsNeverShareATraceDirectory() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let traces = TraceStore(root: root)
+        traces.start(task: "first")
+        let first = try XCTUnwrap(traces.dir)
+        traces.start(task: "second")
+        let second = try XCTUnwrap(traces.dir)
+        XCTAssertNotEqual(first, second)
+        XCTAssertFalse(try String(contentsOf: first.appendingPathComponent("steps.jsonl")).contains("second"))
+    }
+
+    func testStartingRejectsASecondTaskAndStopCancelsDeparture() async {
+        let app = AppModel()
+        let first = Task { await app.run("first") }
+        while !app.starting { await Task.yield() }
+        await app.run("second")
+        XCTAssertEqual(app.lastTask, "first")
+        XCTAssertTrue(app.starting)
+        // Keep the test away from hardware/calibration, while exercising cancellation during departure.
+        app.startCancelled = true
+        await first.value
+        XCTAssertFalse(app.starting)
+        XCTAssertFalse(app.departing)
+        XCTAssertFalse(app.agent.running)
+    }
+
     func testRunIsReadBackWithFramesOutcomeAndDuration() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let traces = TraceStore(root: root)

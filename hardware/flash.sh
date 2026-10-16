@@ -5,6 +5,7 @@
 #   --sta         test build: join the Wi-Fi in hid_bridge/secrets.h instead of opening a hotspot
 #   --build-only  compile only (prints flash/RAM usage)
 #   --ap-tune     A/B build: hotspot on a 20 MHz channel with 300 TU beacons (more airtime for BLE)
+#   --display-es3c28p  enable LCDWIKI ES3C28P/ES3N28P ILI9341 status screen
 # BLE host: h2zero NimBLE-Arduino (arduino-cli lib install "NimBLE-Arduino"); its buffer sizes live in
 # hid_bridge/nimble_cfg.h, force-included into every C/C++ file below.
 # A running bridge is a TinyUSB device, so it is first kicked into the ROM
@@ -21,6 +22,7 @@ for a in "$@"; do
            DEFS+=" -DSTA_FROM_SECRETS=1" ;;
     --build-only) BUILD_ONLY=1 ;;
     --ap-tune) DEFS+=" -DAP_TUNE=1" ;;
+    --display-es3c28p) DEFS+=" -DSTATUS_DISPLAY_ES3C28P=1" ;;
     *) PORT=$a ;;
   esac
 done

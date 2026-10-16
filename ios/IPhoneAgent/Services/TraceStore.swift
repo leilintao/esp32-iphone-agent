@@ -16,7 +16,9 @@ import Foundation
         let f = DateFormatter()
         f.dateFormat = "yyyyMMdd-HHmmss"
         f.locale = Locale(identifier: "en_US_POSIX")
-        let d = root.appendingPathComponent(f.string(from: Date()))
+        // Two short failed starts can finish within the same second. Never append a new task
+        // to an existing run's steps or overwrite its numbered screenshots.
+        let d = root.appendingPathComponent(f.string(from: Date()) + "-" + String(UUID().uuidString.prefix(8)))
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
         dir = d
         n = 0

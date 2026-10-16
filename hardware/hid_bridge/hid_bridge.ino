@@ -17,6 +17,8 @@
 #include "ble_link.h"
 #include "netcfg.h"
 #include "video_link.h"
+#include "status_display.h"
+#include "boot_voice.h"
 #include "src/airplay/airplay.h"
 
 const int STEP = 10;      // max pointer delta per report while moving
@@ -124,11 +126,20 @@ const char *usbState() {
   return tud_suspended() ? "asleep" : "ok";
 }
 
+String statusJson(bool full);
+
 // Board-level commands from the app; everything else is an HID command for run().
 String board(const String &line, const String &id) {
   int sp = line.indexOf(' ');
   String cmd = sp < 0 ? line : line.substring(0, sp);
+  display_command(cmd);
   String arg = sp < 0 ? "" : line.substring(sp + 1);
+  if (cmd == "status") return "ok " + statusJson(true);
+  if (cmd == "audio") {
+    if (arg == "twice") return boot_voice_twice() ? "ok twice" : "err audio busy or unavailable";
+    if (arg.length()) return "err usage: audio [twice]";
+    return String("ok ") + boot_voice_status();
+  }
   long a = 0, b = 0;
   int n = sscanf(arg.c_str(), "%ld %ld", &a, &b);
   if (cmd == "stream") {
@@ -173,20 +184,25 @@ String board(const String &line, const String &id) {
 String statusJson(bool full) {
   static const char *apStates[] = {"idle", "connected", "streaming"};
   VideoStats v = video_stats();
-  char s[384];
+  char s[640];
   snprintf(s, sizeof s,
            "{\"up\":%lu,\"rst\":\"%s\",\"heap\":%u,\"psram\":%u,\"usb\":\"%s\",\"net\":\"%s\",\"ip\":\"%s\",\"sta\":%d,"
            "\"ap\":\"%s\",\"w\":%u,\"h\":%u,\"kbps\":%lu,\"fps\":%.1f,\"idr\":%lu,\"gop\":%lu,"
+           "\"vwait\":%d,\"vover\":%lu,\"vage\":%lu,\"vlarge\":%lu,"
            "\"ble\":{\"mtu\":%u,\"phy\":%u,\"kbps\":%lu,\"drop\":%lu,\"rdrop\":%lu,\"n\":%d}}",
            millis(), resetReason(), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), usbState(), net_mode(), net_ip().c_str(), net_peers(),
            apStates[airplay_state()], cfg_width(), cfg_height(), (unsigned long)v.kbps, v.fps, (unsigned long)v.idr_ms,
-           (unsigned long)v.gop_bytes, ble_mtu(), ble_phy(), (unsigned long)ble_kbps(), (unsigned long)ble_drops(),
+           (unsigned long)v.gop_bytes, v.wait_idr, (unsigned long)v.overflows,
+           (unsigned long)v.age_ms, (unsigned long)v.oversized,
+           ble_mtu(), ble_phy(), (unsigned long)ble_kbps(), (unsigned long)ble_drops(),
            (unsigned long)ble_reply_drops(), ble_peers());
   if (full) return s;
   // MTU below ~250 (before the MTU exchange): keep only the fields the app needs to stay alive
-  snprintf(s, sizeof s, "{\"up\":%lu,\"rst\":\"%s\",\"usb\":\"%s\",\"net\":\"%s\",\"ap\":\"%s\",\"ble\":{\"mtu\":%u}}",
-           millis(), resetReason(), usbState(), net_mode(), apStates[airplay_state()], ble_mtu());
+  snprintf(s, sizeof s, "{\"up\":%lu,\"rst\":\"%s\",\"usb\":\"%s\",\"net\":\"%s\",\"ap\":\"%s\","
+           "\"vwait\":%d,\"vover\":%lu,\"vage\":%lu,\"vlarge\":%lu,\"ble\":{\"mtu\":%u}}",
+           millis(), resetReason(), usbState(), net_mode(), apStates[airplay_state()], v.wait_idr,
+           (unsigned long)v.overflows, (unsigned long)v.age_ms, (unsigned long)v.oversized, ble_mtu());
   return s;
 }
 
@@ -222,6 +238,7 @@ void startAirplay() {
 
 void setup() {
   Serial.begin(115200);
+  display_begin();
 #if DEBUG_SERIAL
   for (int i = 0; i < 30 && !Serial; i++) delay(100);  // give a serial monitor 3 s to catch the boot lines
 #endif
@@ -239,6 +256,7 @@ void setup() {
   ble_begin("ESP32 Agent " + board_suffix());
   startAirplay();
   xTaskCreatePinnedToCore(statusTask, "status", 4096, NULL, 1, NULL, 1);
+  boot_voice_begin();
   Serial.printf("boot %s: free internal heap %u (largest %u), PSRAM %u, reset %s\n", receiverName.c_str(),
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
@@ -249,6 +267,7 @@ void loop() {
   static bool linked = false;
   esp_task_wdt_reset();
   net_poll();
+  display_poll(usbState(), resetReason());
   if (linked && !ble_connected()) {
     mouse.release(MOUSE_LEFT);  // a gesture cut off mid-way must not leave the button held (long press)
     keyboard.releaseAll();

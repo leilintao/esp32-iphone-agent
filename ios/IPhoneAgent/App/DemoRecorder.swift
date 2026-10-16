@@ -22,7 +22,7 @@ import UIKit
     }
 
     func start() {
-        guard !recording, !app.agent.running else { return }
+        guard !recording, !app.agent.running, !app.starting else { return }
         let f = DateFormatter()
         f.dateFormat = "yyyyMMdd-HHmmss"
         f.locale = Locale(identifier: "en_US_POSIX")

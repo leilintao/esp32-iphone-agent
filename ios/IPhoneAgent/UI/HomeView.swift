@@ -241,7 +241,7 @@ struct HomeView: View {
 
     private var bottomBar: some View {
         BottomBar {
-            if agent.running {
+            if agent.running || app.starting {
                 Button {
                     Haptics.stop()
                     Task { await app.stopAgent() }
@@ -264,7 +264,7 @@ struct HomeView: View {
 
     private func run(_ item: SavedTask) {
         task = item.prompt
-        guard blocker == nil, !agent.running else { return }
+        guard blocker == nil, !agent.running, !app.starting else { return }
         start(item.prompt, intent: item)
     }
 

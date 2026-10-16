@@ -95,7 +95,7 @@ struct Run: Identifiable, Equatable {
         var isMove: Bool { !StepText.notMoves.contains(name) }
     }
 
-    let id: String  // folder name, yyyyMMdd-HHmmss
+    let id: String  // folder name, yyyyMMdd-HHmmss[-unique suffix]
     let folder: URL
     let task: String
     let date: Date
@@ -150,7 +150,7 @@ struct Run: Identifiable, Equatable {
         f.dateFormat = "yyyyMMdd-HHmmss"
         f.locale = Locale(identifier: "en_US_POSIX")
         return Run(id: folder.lastPathComponent, folder: folder, task: task,
-                   date: f.date(from: folder.lastPathComponent.replacingOccurrences(of: "imported-", with: "")) ?? Date(),
+                   date: f.date(from: String(folder.lastPathComponent.replacingOccurrences(of: "imported-", with: "").prefix(15))) ?? Date(),
                    steps: steps)
     }
 

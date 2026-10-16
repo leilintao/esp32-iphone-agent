@@ -101,6 +101,16 @@ import XCTest
         XCTAssertEqual(s.fps, 4.8)
     }
 
+    func testVideoHealthSurvivesReducedStatusUpdates() throws {
+        let full = try XCTUnwrap(BoardStatus.decode(Data(#"{"vwait":1,"vover":3,"vage":90000,"vlarge":2}"#.utf8)))
+        let short = try XCTUnwrap(BoardStatus.decode(Data(#"{"up":100,"vwait":0,"vage":20}"#.utf8)))
+        let merged = full.merged(with: short)
+        XCTAssertEqual(merged.vwait, 0)
+        XCTAssertEqual(merged.vover, 3)
+        XCTAssertEqual(merged.vage, 20)
+        XCTAssertEqual(merged.vlarge, 2)
+    }
+
     func testPointerRehomesEveryTenGestures() async throws {
         let device = FakeDevice()
         let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")

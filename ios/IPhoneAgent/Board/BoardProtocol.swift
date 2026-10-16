@@ -29,6 +29,7 @@ struct BoardStatus: Codable, Equatable {
     var ap: String?    // idle | connected | streaming
     var w: Int?, h: Int?
     var kbps: Double?, fps: Double?, idr: Int?, gop: Int?
+    var vwait: Int?, vover: Int?, vage: Int?, vlarge: Int?
     var ble: BLE?
 
     static func decode(_ data: Data) -> BoardStatus? { try? JSONDecoder().decode(BoardStatus.self, from: data) }
@@ -41,6 +42,8 @@ struct BoardStatus: Codable, Equatable {
         m.usb = n.usb ?? usb; m.net = n.net ?? net; m.ip = n.ip ?? ip; m.sta = n.sta ?? sta; m.ap = n.ap ?? ap
         m.w = n.w ?? w; m.h = n.h ?? h; m.kbps = n.kbps ?? kbps; m.fps = n.fps ?? fps; m.idr = n.idr ?? idr
         m.gop = n.gop ?? gop
+        m.vwait = n.vwait ?? vwait; m.vover = n.vover ?? vover
+        m.vage = n.vage ?? vage; m.vlarge = n.vlarge ?? vlarge
         let a = ble ?? BLE(), b = n.ble ?? BLE()
         m.ble = BLE(mtu: b.mtu ?? a.mtu, phy: b.phy ?? a.phy, kbps: b.kbps ?? a.kbps, drop: b.drop ?? a.drop)
         return m

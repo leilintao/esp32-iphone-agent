@@ -143,6 +143,25 @@ static void test_chunker(void) {
   n = vchunk_next(&c, out, 20, 0);
   CHECK(n == VCHUNK_HDR + 4 + 3 && (out[2] & (VF_START | VF_END | VF_CONFIG)) == (VF_START | VF_END | VF_CONFIG));
   CHECK(vchunk_next(&c, out, 20, 1) == 0);
+
+  // Live delivery pauses after four chunks so a queued snapshot can run. Resuming the
+  // persistent cursor must not repeat START or lose payload bytes across task iterations.
+  vchunk_begin(&c, data, sizeof data, VF_IDR, 99);
+  got_len = 0;
+  seq = 100;
+  int turns = 0;
+  while (got_len < sizeof data) {
+    turns++;
+    for (int i = 0; i < 4 && (n = vchunk_next(&c, out, 10, seq)) > 0; i++, seq++) {
+      bool first = (out[2] & VF_START) != 0;
+      CHECK(first == (got_len == 0));
+      size_t off = VCHUNK_HDR + (first ? 4 : 0);
+      memcpy(got + got_len, out + off, n - off);
+      got_len += n - off;
+    }
+  }
+  CHECK(turns == 3);
+  CHECK(got_len == sizeof data && !memcmp(got, data, sizeof data));
 }
 
 int main(void) {
