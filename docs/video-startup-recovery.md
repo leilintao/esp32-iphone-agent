@@ -194,3 +194,15 @@ checks the connected GATT service before transmitting authorization. A real
 foreground connection completed subscription, authorization and a framed return
 confirmation. Screenshot/background/reconnect acceptance remains pending until
 mirroring is restored; the confirmation event alone is not screenshot success.
+
+After restoring mirroring, a real diagnostic JPEG reached the Mac (look ID
+`F302C711-3588-4ABD-B540-1490D4C0FD2E`, frame age 0.191 s) showing Control
+Center's selected ESP32 Agent receiver. The user then manually opened Calculator.
+With the Agent in the background, a second real JPEG reached the Mac (look ID
+`11C77318-B276-4E38-8E2B-5F5DBE6CB5E8`, frame age 0.190 s), visibly showing
+Calculator at 0. Both images were fetched from the viewer and visually inspected.
+This verifies foreground and background diagnostic-frame delivery on this session,
+not just GATT acknowledgements. No model requests or HID actions were sent during
+these checks. Automatic model-frame delivery and interrupted/background reconnect
+have not yet been re-tested on this version. The previously reported pointer miss
+(target 1, observed near the left of 4) and 5535 calculation remain unresolved.
