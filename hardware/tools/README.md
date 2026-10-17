@@ -65,6 +65,12 @@ stay in local process memory; no additional cloud or signing account is needed.
 The feature needs the new IPA; a page with no screenshots is NOT evidence that
 the old app supports preview. See `docs/video-startup-recovery.md` for test limits.
 
+If the board is still connected to the Mac over USB, add `--serial <board-port>`
+to send preview authorization over USB instead of creating a second board BLE
+connection. Phone discovery explicitly filters the preview service UUID (needed
+for iOS background advertisements). Initial discovery waits up to three minutes
+so bringing the app to the foreground can complete the same connection attempt.
+
 ## 4. Back to the iPhone
 
 Reflash without `--sta` (`hardware/flash.sh`), then plug the board into the iPhone.

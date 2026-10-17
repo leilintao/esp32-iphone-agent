@@ -1,8 +1,11 @@
 import base64
+import asyncio
 import importlib.util
 import json
 import struct
 import unittest
+import types
+from unittest.mock import AsyncMock, MagicMock, patch
 from pathlib import Path
 
 spec = importlib.util.spec_from_file_location("live_preview", Path(__file__).with_name("live_preview.py"))
@@ -56,6 +59,28 @@ class PreviewTests(unittest.TestCase):
         self.assertEqual(len(state.events), 120)
         self.assertEqual(len(state.frames), 120)
         self.assertNotIn("0", state.frames)
+
+
+class ConnectionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_phone_discovery_uses_explicit_service_filter(self):
+        find = AsyncMock(side_effect=asyncio.CancelledError)
+        bleak = types.SimpleNamespace(BleakClient=MagicMock(),
+                                      BleakScanner=types.SimpleNamespace(find_device_by_filter=find))
+        control = AsyncMock()
+        with patch.dict("sys.modules", {"bleak": bleak}), patch.object(preview, "preview_control", control):
+            with self.assertRaises(asyncio.CancelledError):
+                await preview.watch(preview.Events(), "a" * 32, "/dev/test-board")
+        control.assert_awaited_once_with("a" * 32, "/dev/test-board")
+        self.assertEqual(find.await_args.kwargs["service_uuids"], [preview.SERVICE])
+
+    async def test_usb_authorization_sends_only_preview_control(self):
+        link = MagicMock()
+        link.readline.return_value = b"990801 ok\n"
+        serial = types.SimpleNamespace(Serial=MagicMock())
+        serial.Serial.return_value.__enter__.return_value = link
+        with patch.dict("sys.modules", {"serial": serial}), patch.object(preview.Path, "exists", return_value=True):
+            await preview.preview_control("a" * 32, "/dev/test-board")
+        link.write.assert_called_once_with(b"990801 app preview " + b"a" * 32 + b"\n")
 
 
 if __name__ == "__main__":
