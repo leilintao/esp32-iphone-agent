@@ -41,6 +41,17 @@ extension AppModel {
         case "status": say(statusSummary)
         case "preview":
             if rest == "off" { preview.disable(); say("preview: off") }
+            else if rest == "status" { say("preview: " + preview.status) }
+            else if rest == "frame" {
+                guard feed.live, let frame = feed.frame else { return say("preview: no live frame; restore screen mirroring first") }
+                do {
+                    let image = try feed.modelViewport?.image(frame) ?? frame
+                    preview.publish(["kind": "look", "id": UUID().uuidString, "role": "diagnostic",
+                                     "task": "预览连通性检查（未请求模型、未执行点击）",
+                                     "frameAge": max(0, now() - feed.capturedAt)], image: image)
+                    say("preview: diagnostic frame queued")
+                } catch { say("preview: frame preparation failed: \(error.localizedDescription)") }
+            }
             else { say(preview.enable(rest) ? "preview: enabled for one hour" : "preview: invalid session token") }
         case "log": relayHistory(Int(rest) ?? 50)
         case "mode":

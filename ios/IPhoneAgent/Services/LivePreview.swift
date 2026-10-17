@@ -33,6 +33,8 @@ struct PreviewOutbox {
     private var viewer: CBCentral?
     private var subscribed = Set<UUID>()
     private var output: CBMutableCharacteristic?
+    private var serviceReady = false
+    private var addingService = false
     private var outbox = PreviewOutbox()
     private var latest: Data?
     private var expiryTask: Task<Void, Never>?
@@ -43,7 +45,14 @@ struct PreviewOutbox {
         disable()
         token = secret
         expires = Date().addingTimeInterval(3600)
-        manager = CBPeripheralManager(delegate: self, queue: .main)
+        // Keep one peripheral manager and a stable GATT database across authorizations.
+        // Rotating a token must not remove services underneath a reconnecting Mac.
+        if manager == nil {
+            manager = CBPeripheralManager(delegate: self, queue: .main)
+        } else if let manager, manager.state == .poweredOn {
+            prepareService(manager)
+        }
+        DebugLog.write("preview: authorization renewed; " + status)
         expiryTask = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: 3_600_000_000_000) } catch { return }
             self?.disable()
@@ -54,10 +63,14 @@ struct PreviewOutbox {
     func disable() {
         expiryTask?.cancel(); expiryTask = nil
         manager?.stopAdvertising()
-        manager?.removeAllServices()
-        manager?.delegate = nil
-        manager = nil; token = nil; viewer = nil; output = nil
-        subscribed.removeAll(); outbox.reset(); latest = nil
+        token = nil; viewer = nil
+        // Token revocation does not cancel the OS's existing CCCD subscriptions.
+        // Keep that transport state; no bytes can leave without a new authenticated viewer.
+        outbox.reset(); latest = nil
+    }
+
+    var status: String {
+        "radio=\(manager?.state.rawValue ?? -1) service=\(serviceReady) advertising=\(manager?.isAdvertising ?? false) subscribers=\(subscribed.count) authenticated=\(viewer != nil)"
     }
 
     func publish(_ fields: [String: Any], image: Data? = nil) {
@@ -88,7 +101,21 @@ struct PreviewOutbox {
     }
 
     func peripheralManagerDidUpdateState(_ peripheral: CBPeripheralManager) {
-        guard peripheral.state == .poweredOn, token != nil else { return }
+        DebugLog.write("preview: radio state \(peripheral.state.rawValue)")
+        guard peripheral.state == .poweredOn else {
+            output = nil; serviceReady = false; addingService = false
+            viewer = nil; subscribed.removeAll(); outbox.reset()
+            return
+        }
+        guard token != nil else { return }
+        prepareService(peripheral)
+    }
+
+    private func prepareService(_ peripheral: CBPeripheralManager) {
+        guard token != nil, Date() < expires else { return }
+        if serviceReady { advertise(peripheral); return }
+        guard !addingService else { return }
+        addingService = true
         let auth = CBMutableCharacteristic(type: Self.authID, properties: [.write], value: nil, permissions: [.writeable])
         let data = CBMutableCharacteristic(type: Self.dataID, properties: [.notify], value: nil, permissions: [])
         output = data
@@ -98,9 +125,25 @@ struct PreviewOutbox {
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
-        guard error == nil else { return }
+        addingService = false
+        if let error {
+            output = nil; serviceReady = false
+            DebugLog.write("preview: service registration failed: \(error.localizedDescription)")
+            return
+        }
+        serviceReady = true
+        DebugLog.write("preview: screenshot service registered")
+        advertise(peripheral)
+    }
+
+    private func advertise(_ peripheral: CBPeripheralManager) {
+        guard token != nil, Date() < expires, !peripheral.isAdvertising else { return }
         peripheral.startAdvertising([CBAdvertisementDataServiceUUIDsKey: [Self.serviceID],
                                      CBAdvertisementDataLocalNameKey: "Tianbao Preview"])
+    }
+
+    func peripheralManagerDidStartAdvertising(_ peripheral: CBPeripheralManager, error: Error?) {
+        DebugLog.write("preview: advertising " + (error.map { "failed: \($0.localizedDescription)" } ?? "started"))
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
@@ -109,6 +152,7 @@ struct PreviewOutbox {
                   let value = request.value, String(data: value, encoding: .utf8) == token,
                   token != nil, Date() < expires else {
                 peripheral.respond(to: request, withResult: .insufficientAuthorization)
+                DebugLog.write("preview: rejected invalid or expired authorization")
                 continue
             }
             viewer = request.central
@@ -116,7 +160,9 @@ struct PreviewOutbox {
             // central after a radio interruption and never delivered didUnsubscribe.
             outbox.reset()
             peripheral.respond(to: request, withResult: .success)
+            DebugLog.write("preview: Mac authenticated")
             if let latest { enqueue(latest) }
+            publish(["kind": "state", "state": "截图预览授权成功，等待真实画面"])
             pump()
         }
     }
@@ -126,10 +172,12 @@ struct PreviewOutbox {
         // old stream on subscribe before its new receiver has authenticated.
         if viewer?.identifier == central.identifier { viewer = nil; outbox.reset() }
         subscribed.insert(central.identifier)
+        DebugLog.write("preview: Mac subscribed; packet limit \(central.maximumUpdateValueLength)")
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didUnsubscribeFrom characteristic: CBCharacteristic) {
         subscribed.remove(central.identifier)
+        DebugLog.write("preview: Mac unsubscribed")
         if viewer?.identifier == central.identifier { viewer = nil; outbox.reset() }
     }
 

@@ -62,6 +62,60 @@ class PreviewTests(unittest.TestCase):
 
 
 class ConnectionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_phone_confirmation_reaches_viewer_without_model_or_hid(self):
+        client = MagicMock()
+        transport = {}
+        async def notify(_, callback):
+            transport["receive"] = callback
+        async def authorize(_, value, **kwargs):
+            self.assertEqual(value, b"a" * 32)
+            payload = json.dumps({"kind": "state", "state": "ready"}).encode()
+            transport["receive"](None, struct.pack(">I", len(payload)) + payload)
+            transport["disconnect"](None)
+        client.start_notify = AsyncMock(side_effect=notify)
+        client.write_gatt_char = AsyncMock(side_effect=authorize)
+        def connect(*args, **kwargs):
+            transport["disconnect"] = kwargs["disconnected_callback"]
+            context = MagicMock()
+            context.__aenter__ = AsyncMock(return_value=client)
+            context.__aexit__ = AsyncMock(return_value=False)
+            return context
+        bleak = types.SimpleNamespace(BleakClient=connect,
+            BleakScanner=types.SimpleNamespace(find_device_by_filter=AsyncMock(return_value=object())))
+        state = preview.Events()
+        with patch.dict("sys.modules", {"bleak": bleak}), \
+             patch.object(preview, "preview_control", AsyncMock()), \
+             patch.object(preview.asyncio, "sleep", AsyncMock(side_effect=asyncio.CancelledError)):
+            with self.assertRaises(asyncio.CancelledError):
+                await preview.watch(state, "a" * 32)
+        self.assertIn("已连接", state.snapshot()["status"])
+        self.assertEqual(state.snapshot()["events"][0]["state"], "ready")
+        self.assertFalse(state.frames)
+        self.assertEqual(client.write_gatt_char.await_count, 1)
+        self.assertEqual(client.write_gatt_char.await_args.args[0], preview.AUTH)
+
+    async def test_failure_status_identifies_subscription_or_authorization_stage(self):
+        for operation, expected in (("start_notify", "订阅截图通知"),
+                                    ("write_gatt_char", "验证会话授权")):
+            with self.subTest(operation=operation):
+                client = MagicMock()
+                client.start_notify = AsyncMock()
+                client.write_gatt_char = AsyncMock()
+                getattr(client, operation).side_effect = RuntimeError("diagnostic failure")
+                context = MagicMock()
+                context.__aenter__ = AsyncMock(return_value=client)
+                context.__aexit__ = AsyncMock(return_value=False)
+                bleak = types.SimpleNamespace(
+                    BleakClient=MagicMock(return_value=context),
+                    BleakScanner=types.SimpleNamespace(find_device_by_filter=AsyncMock(return_value=object())))
+                state = preview.Events()
+                with patch.dict("sys.modules", {"bleak": bleak}), \
+                     patch.object(preview, "preview_control", AsyncMock()), \
+                     patch.object(preview.asyncio, "sleep", AsyncMock(side_effect=asyncio.CancelledError)):
+                    with self.assertRaises(asyncio.CancelledError):
+                        await preview.watch(state, "a" * 32)
+                self.assertIn(expected, state.snapshot()["status"])
+
     async def test_phone_discovery_uses_explicit_service_filter(self):
         find = AsyncMock(side_effect=asyncio.CancelledError)
         bleak = types.SimpleNamespace(BleakClient=MagicMock(),

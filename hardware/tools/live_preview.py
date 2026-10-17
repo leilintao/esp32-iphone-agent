@@ -173,9 +173,15 @@ async def watch(events, token, serial_port=None):
     if phone is None:
         raise RuntimeError("仍未发现 iPhone 截图服务；预览尚未连通，请保持 App 在前台并检查手机蓝牙权限")
     while True:
-        decoder = Decoder(events.add)
+        confirmed = asyncio.Event()
+        def accept(event):
+            events.add(event)
+            if isinstance(event, dict) and event.get("kind") in ("look", "decision", "action", "state"):
+                confirmed.set()
+        decoder = Decoder(accept)
         lost = asyncio.Event()
         failure = []
+        stage = "连接手机"
         def receive(_, raw):
             try:
                 decoder.feed(raw)
@@ -184,18 +190,31 @@ async def watch(events, token, serial_port=None):
                 lost.set()
         try:
             async with BleakClient(phone, disconnected_callback=lambda _: lost.set(), timeout=15) as client:
+                stage = "订阅截图通知"
+                print("预览：蓝牙已连接，正在订阅截图通知。", flush=True)
                 await client.start_notify(DATA, receive)
+                stage = "验证会话授权"
+                print("预览：通知订阅成功，正在验证会话授权。", flush=True)
                 await client.write_gatt_char(AUTH, token.encode(), response=True)
+                stage = "等待手机回传确认"
+                await asyncio.wait_for(confirmed.wait(), timeout=12)
+                stage = "接收截图数据"
                 events.set_status("已连接 · 等待下一次模型看图（不是连续录屏）")
                 print("已连接 iPhone 截图预览。现在可以回到计算器并开始任务。", flush=True)
                 await lost.wait()
                 if failure:
                     raise RuntimeError(failure[-1])
         except Exception as error:
-            events.set_status("预览断开；旧图仅供回看。请将 ESP32 Agent 打开到前台重连。")
+            events.set_status(f"预览在“{stage}”阶段断开；旧图仅供回看。")
             detail = str(error).replace(token, "<session>")[:200]
-            print("预览连接中断：", type(error).__name__, detail, flush=True)
+            print("预览连接中断：", stage, type(error).__name__, detail, flush=True)
         await asyncio.sleep(3)
+        # A reinstalled app or re-created peripheral can invalidate the old peripheral
+        # instance. Re-scan rather than repeatedly connecting the same stale object.
+        rediscovered = await BleakScanner.find_device_by_filter(
+            lambda _, __: True, service_uuids=[SERVICE], timeout=10)
+        if rediscovered is not None:
+            phone = rediscovered
 
 
 def main():

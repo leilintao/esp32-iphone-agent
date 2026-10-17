@@ -163,3 +163,25 @@ complete image; it can replace a stale central using the same valid session toke
 Tests reproduce partial-old-message reset and bounded, retryable output. The Mac
 prints redacted connection error details rather than hiding the reason. This is
 reconnection hardening, not yet proof that every background disconnect is fixed.
+
+### Preview service lifecycle diagnostics (1.0.4 / build 5)
+
+During the next foreground attempt, the phone acknowledged session authorization
+but the Mac did not discover the screenshot service. An earlier retry reported
+GATT error 242 without identifying the failing operation. These observations do
+not yet establish a root cause.
+
+The phone now retains one peripheral manager and a stable service database across
+token changes instead of removing/recreating services for each authorization.
+Revocation still clears the authenticated viewer and queued images, but preserves
+actual OS subscription state. Radio state, service registration, advertising,
+subscription and authorization outcomes are logged without tokens. The Mac records
+the failing stage, re-discovers after a disconnect, and waits for a framed return
+event before declaring the preview connected.
+
+`app preview status` reads these states. `app preview frame` publishes a current
+letterboxed diagnostic frame only when video is live; its role/task explicitly
+identify it as a connectivity check, not a model call. It invokes neither the
+model nor HID. Restore AirPlay mirroring before using it. Real model `look` events
+remain the exact bytes passed to the model. This release still requires real-phone
+foreground, background and reconnect acceptance; passing tests is not acceptance.
