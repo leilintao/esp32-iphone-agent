@@ -195,7 +195,7 @@ async def watch(events, token, serial_port=None):
                 await client.start_notify(DATA, receive)
                 stage = "验证会话授权"
                 print("预览：通知订阅成功，正在验证会话授权。", flush=True)
-                await client.write_gatt_char(AUTH, token.encode(), response=True)
+                await client.write_gatt_char(AUTH, bytes.fromhex(token), response=True)
                 stage = "等待手机回传确认"
                 await asyncio.wait_for(confirmed.wait(), timeout=12)
                 stage = "接收截图数据"

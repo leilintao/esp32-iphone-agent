@@ -68,7 +68,7 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
         async def notify(_, callback):
             transport["receive"] = callback
         async def authorize(_, value, **kwargs):
-            self.assertEqual(value, b"a" * 32)
+            self.assertEqual(value, b"\xaa" * 16)
             payload = json.dumps({"kind": "state", "state": "ready"}).encode()
             transport["receive"](None, struct.pack(">I", len(payload)) + payload)
             transport["disconnect"](None)

@@ -1,6 +1,17 @@
 import CoreBluetooth
 import Foundation
 
+enum PreviewAuthorization {
+    static func matches(_ value: Data, token: String?) -> Bool {
+        guard let token, token.count == 32 else { return false }
+        // The binary form fits even a default 20-byte ATT write payload.
+        if value.count == 16 {
+            return value.map { String(format: "%02x", $0) }.joined() == token.lowercased()
+        }
+        return String(data: value, encoding: .utf8) == token
+    }
+}
+
 /// No stream may resume in the middle of a previous connection's JSON/JPEG event.
 struct PreviewOutbox {
     private(set) var packets: [Data] = []
@@ -153,24 +164,22 @@ struct PreviewOutbox {
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
-        for request in requests {
-            guard request.characteristic.uuid == Self.authID, request.offset == 0,
-                  let value = request.value, String(data: value, encoding: .utf8) == token,
-                  token != nil, Date() < expires else {
-                peripheral.respond(to: request, withResult: .insufficientAuthorization)
-                DebugLog.write("preview: rejected invalid or expired authorization")
-                continue
-            }
-            viewer = request.central
-            // Authentication starts a fresh framed stream, even if iOS retained a stale
-            // central after a radio interruption and never delivered didUnsubscribe.
-            outbox.reset()
-            peripheral.respond(to: request, withResult: .success)
-            DebugLog.write("preview: Mac authenticated")
-            if let latest { enqueue(latest) }
-            publish(["kind": "state", "state": "截图预览授权成功，等待真实画面"])
-            pump()
+        guard let request = requests.first else { return }
+        // CoreBluetooth requires exactly one response for the entire atomic batch.
+        // This protocol accepts one complete token write, never partial authorization.
+        guard requests.count == 1, request.characteristic.uuid == Self.authID, request.offset == 0,
+              let value = request.value, PreviewAuthorization.matches(value, token: token), Date() < expires else {
+            peripheral.respond(to: request, withResult: .insufficientAuthorization)
+            DebugLog.write("preview: rejected invalid or expired authorization")
+            return
         }
+        viewer = request.central
+        outbox.reset()
+        peripheral.respond(to: request, withResult: .success)
+        DebugLog.write("preview: Mac authenticated")
+        if let latest { enqueue(latest) }
+        publish(["kind": "state", "state": "截图预览授权成功，等待真实画面"])
+        pump()
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didSubscribeTo characteristic: CBCharacteristic) {

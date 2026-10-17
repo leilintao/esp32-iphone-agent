@@ -2,6 +2,17 @@ import XCTest
 @testable import IPhoneAgent
 
 @MainActor final class LivePreviewTests: XCTestCase {
+    func testBinaryAuthorizationFitsDefaultATTAndRetainsFullToken() {
+        let token = "00112233445566778899aabbccddeeff"
+        let binary = Data(stride(from: 0, through: 255, by: 17).map { UInt8($0) })
+        XCTAssertEqual(binary.count, 16)
+        XCTAssertTrue(PreviewAuthorization.matches(binary, token: token))
+        XCTAssertTrue(PreviewAuthorization.matches(Data(token.utf8), token: token))
+        XCTAssertFalse(PreviewAuthorization.matches(binary.dropLast(), token: token))
+        XCTAssertFalse(PreviewAuthorization.matches(Data(repeating: 0, count: 16), token: token))
+        XCTAssertFalse(PreviewAuthorization.matches(binary, token: nil))
+    }
+
     func testReauthenticationDiscardsPartialOldMessage() {
         var outbox = PreviewOutbox()
         outbox.enqueue(Data([0, 0, 0, 8, 1, 2, 3, 4, 5, 6, 7, 8]))
