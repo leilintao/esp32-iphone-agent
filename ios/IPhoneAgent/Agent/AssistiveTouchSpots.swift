@@ -22,11 +22,19 @@ enum AssistiveTouchSpots {
 
     /// The prompt rule, with the remembered spots in the models' 0–1000 coordinates.
     static var rule: String {
+        rule(viewport: nil)
+    }
+
+    static func rule(viewport: ModelViewport?) -> String {
         var text = """
 Never tap the AssistiveTouch floating button (a small translucent round button at a screen edge). \
 If an AssistiveTouch menu panel is visible, close it by tapping outside it.
 """
-        let spots = all.map { "(\(Int($0.x * 1000)), \(Int($0.y * 1000)))" }
+        let spots = all.map {
+            let phone = CGPoint(x: $0.x * 1000, y: $0.y * 1000)
+            let p = viewport?.canvasPoint(phone) ?? phone
+            return "(\(Int(p.x)), \(Int(p.y)))"
+        }
         if !spots.isEmpty { text += " It was last seen near " + spots.joined(separator: ", ") + "; keep away from there." }
         return text
     }

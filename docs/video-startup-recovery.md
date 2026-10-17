@@ -132,3 +132,27 @@ in memory, uses no cloud uploads or external assets and requires a per-session
 board is reachable; otherwise it expires after one hour. First discovery must
 happen with the iPhone app in front; background reconnection is not guaranteed.
 Actual phone-to-Mac throughput/background delivery remains to be verified.
+
+### Coordinate mismatch captured by the live preview
+
+The 22:20 calculator test on 1.0.2 (3) delivered the exact 720x1560 model
+input to the Mac in about a second. Board backlog reached zero, decoder drops
+were zero, and subsequent model requests/gestures arrived while the app was
+in the background. However, the actor returned taps (274,749) and (103,1230):
+these are the original screenshot's pixel centers for AC and 1, despite the
+prompt requiring normalized 0..1000. The original controller interpreted
+them as normalized coordinates and clamped y=1230 to the bottom. This is
+direct evidence for the warm-calculator targeting failure, separate from
+the earlier video backlog.
+
+App 1.0.3 (4) sends a 1000x1000 letterboxed model image (preserving aspect).
+Pixel and normalized coordinates now coincide on that canvas. It transforms
+the entire action batch back to phone-normalized coordinates exactly once,
+rejects padding/out-of-range targets before ANY gesture, maps history and
+remembered AssistiveTouch spots into the same canvas, and preserves original
+frames for phone-side change detection and replay. Live preview still shows
+the exact model image, including its letterboxing. Regression tests cover
+the observed 1230 target, calculator 1 location, all gesture types, edge
+rounding, identical preview/model input and whole-batch rejection. The fix
+still requires post-install real-phone acceptance; no 5535 result has been
+verified yet.

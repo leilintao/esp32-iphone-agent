@@ -13,6 +13,7 @@
 		079927568C3047DA5C2F105E /* Recovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AE108AA4534D13B7AC12079 /* Recovery.swift */; };
 		0A553429560D1697C678A682 /* AboutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E948F0EBC262C7ABF8E413E5 /* AboutView.swift */; };
 		0B7AB0B39C3257BD2E395DC2 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2418164D156C7D2934CA5312 /* Theme.swift */; };
+		16CC23D0AA77725E36E74D2B /* ModelViewportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E1338533CE52607FBB45E9D /* ModelViewportTests.swift */; };
 		173BD54931BD69B83D7F6FD3 /* CalibrationToast.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2E3712143A195602610004B /* CalibrationToast.swift */; };
 		180133912100FC228377AE9A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F960AA3F536A5DF20F8E908A /* Assets.xcassets */; };
 		189667BD260B5751915C28AF /* OnboardingPages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22464AAA35416D0351B8063C /* OnboardingPages.swift */; };
@@ -29,6 +30,7 @@
 		3607786AAF7296B3414B6F08 /* VisionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1887982FE1A729487269296E /* VisionTests.swift */; };
 		419FA08397BAF31F91A62633 /* DebugLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B88A1538529C9674B323370 /* DebugLog.swift */; };
 		42A1AE0EA1AC18461ED8F33B /* RecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F2E6CFBDF20832FF9626D99 /* RecoveryTests.swift */; };
+		43FE5969BAC91BBC3D62CE9D /* ModelViewport.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD6DF77E4C19A00F65E2D6A4 /* ModelViewport.swift */; };
 		48100361D2ECFE7E36F83F9D /* LLMTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F071F3E4D7B82DE70AE75A81 /* LLMTests.swift */; };
 		4A2BFED999CA010867968893 /* H264Decoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 607F9EBBC39E74507B73F751 /* H264Decoder.swift */; };
 		4C33F19F733F62B5A131BE9E /* TouchCalibration.swift in Sources */ = {isa = PBXBuildFile; fileRef = C70A2F48B5948F180DF1450C /* TouchCalibration.swift */; };
@@ -188,6 +190,7 @@
 		8AE108AA4534D13B7AC12079 /* Recovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Recovery.swift; sourceTree = "<group>"; };
 		8B2B975DEE7BC511DC51441F /* Prompts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Prompts.swift; sourceTree = "<group>"; };
 		8C498727CAF51C5A955A8A10 /* PrivacyViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacyViews.swift; sourceTree = "<group>"; };
+		8E1338533CE52607FBB45E9D /* ModelViewportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelViewportTests.swift; sourceTree = "<group>"; };
 		8E64CF4B18DBAB014C7E9314 /* StepFrame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StepFrame.swift; sourceTree = "<group>"; };
 		8F2E6CFBDF20832FF9626D99 /* RecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoveryTests.swift; sourceTree = "<group>"; };
 		915FC0D291F09BE0A0439D9C /* RunsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunsView.swift; sourceTree = "<group>"; };
@@ -209,6 +212,7 @@
 		B1B84B4F1C81E697ACB30630 /* RunShare.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunShare.swift; sourceTree = "<group>"; };
 		B260480A536241A2B9043EE1 /* AgentShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentShortcuts.swift; sourceTree = "<group>"; };
 		B9719A5EC1DD7C5033CC8DF5 /* Metrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Metrics.swift; sourceTree = "<group>"; };
+		BD6DF77E4C19A00F65E2D6A4 /* ModelViewport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelViewport.swift; sourceTree = "<group>"; };
 		C12C6B350F7AFD555CE0B8EA /* HotspotJoin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotspotJoin.swift; sourceTree = "<group>"; };
 		C5099810C37BB0AD66EDC8C8 /* TouchProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchProbe.swift; sourceTree = "<group>"; };
 		C70A2F48B5948F180DF1450C /* TouchCalibration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchCalibration.swift; sourceTree = "<group>"; };
@@ -244,6 +248,7 @@
 				17DBD3270E7E91B39C3C7438 /* AgentLoop.swift */,
 				D317C60AA727B6A20A589DAC /* AssistiveTouchSpots.swift */,
 				FCC7FAA4989F36E7F9B4C021 /* JSON.swift */,
+				BD6DF77E4C19A00F65E2D6A4 /* ModelViewport.swift */,
 				A5CC3BCF7F90AF60B075DD96 /* Pointer.swift */,
 				435B39A7D499300AADA2D16C /* ProbeFit.swift */,
 				8B2B975DEE7BC511DC51441F /* Prompts.swift */,
@@ -304,6 +309,7 @@
 				A54BC007EE5C64A13CDEE9EE /* IslandTests.swift */,
 				9D621703F0434227A340CBD4 /* LivePreviewTests.swift */,
 				F071F3E4D7B82DE70AE75A81 /* LLMTests.swift */,
+				8E1338533CE52607FBB45E9D /* ModelViewportTests.swift */,
 				F775C2B833B33E951A629957 /* PromptTests.swift */,
 				8F2E6CFBDF20832FF9626D99 /* RecoveryTests.swift */,
 				794E46A6A28E406A3D606661 /* ReviewTests.swift */,
@@ -601,6 +607,7 @@
 				2CF6A30C3D72E05EEBC6FFED /* IslandTests.swift in Sources */,
 				48100361D2ECFE7E36F83F9D /* LLMTests.swift in Sources */,
 				969E104A9D208ECD56AC5047 /* LivePreviewTests.swift in Sources */,
+				16CC23D0AA77725E36E74D2B /* ModelViewportTests.swift in Sources */,
 				962068E4EB7D31C8E1E0A9F2 /* PromptTests.swift in Sources */,
 				42A1AE0EA1AC18461ED8F33B /* RecoveryTests.swift in Sources */,
 				90594045D55F83E5EEE53574 /* ReviewTests.swift in Sources */,
@@ -652,6 +659,7 @@
 				7B684FAA8B218BB9798F9EC3 /* Metrics.swift in Sources */,
 				B356EECAFE045249704E63FD /* MockMode.swift in Sources */,
 				7F412478410DC75BC26A0D5C /* ModelSettingsView.swift in Sources */,
+				43FE5969BAC91BBC3D62CE9D /* ModelViewport.swift in Sources */,
 				4CA70811574C401EB0012355 /* Notifier.swift in Sources */,
 				CFDC07BA9E09D3446164B1B9 /* OnboardingDemos.swift in Sources */,
 				189667BD260B5751915C28AF /* OnboardingPages.swift in Sources */,

@@ -8,6 +8,7 @@ import UIKit
     var updated: Double { get }
     var capturedAt: Double { get }
     var aspect: Double { get }
+    var modelViewport: ModelViewport? { get }
     var unavailableReason: String? { get }
     /// After a gesture that ended at `since`: wait until the screen shows its result (and fetch it, in snap mode).
     func afterAction(since: Double) async
@@ -27,6 +28,7 @@ enum FrameMode: String {
 }
 
 extension ScreenSource {
+    var modelViewport: ModelViewport? { nil }
     var unavailableReason: String? { live ? nil : "no phone screen: start Screen Mirroring first" }
     func afterAction(since: Double) async { await settled() }
 
@@ -138,6 +140,7 @@ extension ScreenSource {
 
     /// Frame width / height (portrait iPhone as a fallback).
     var aspect: Double { size.width > 0 && size.height > 0 ? size.width / size.height : 9 / 19.5 }
+    var modelViewport: ModelViewport? { size.width > 0 && size.height > 0 ? ModelViewport(size: size) : nil }
 
     /// One `video` notify from BoardLink.
     func receive(_ chunk: Data) {

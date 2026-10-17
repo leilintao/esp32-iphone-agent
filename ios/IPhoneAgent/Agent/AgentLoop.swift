@@ -142,7 +142,7 @@ extension Pointer: Gestures {}
     }
 
     private func ask(_ role: String, _ llm: ChatModel, _ system: String, _ prompt: String,
-                     temperature: Double = 0) async throws -> (String, Double, Data?) {
+                     temperature: Double = 0) async throws -> (String, Double, Data?, ModelViewport?) {
         try await gate?()
         var prompt = prompt
         if let lost = try await waitForScreen() {
@@ -152,13 +152,21 @@ extension Pointer: Gestures {}
         }
         guard let screen, screen.live else { throw BlindError() }  // never let the model act blind
         let frame = screen.frame, started = now()
+        let viewport = screen.modelViewport
+        let modelImage = try frame.map { data in try viewport?.image(data) ?? data }
         lookID = UUID().uuidString
         let callID = lookID
         let age = screen.capturedAt > 0 ? max(0, now() - screen.capturedAt) : -1
-        onLook?(callID, role, frame, age)
-        trace?.write(frame, kind: "look", ["look_id": .str(callID), "role": .str(role), "frame_age_s": .num(age)])
+        onLook?(callID, role, modelImage, age)
+        trace?.write(modelImage, kind: "look", ["look_id": .str(callID), "role": .str(role), "frame_age_s": .num(age)])
         onDoing?(.thinking)
-        let reply = try await llm.chat(system: system, text: prompt, image: frame, maxTokens: Self.maxTokens[role] ?? 1000,
+        var modelSystem = system
+        if let viewport {
+            modelSystem = modelSystem.replacingOccurrences(of: AssistiveTouchSpots.rule,
+                with: AssistiveTouchSpots.rule(viewport: viewport))
+            modelSystem += "\nThe supplied image is exactly 1000x1000 pixels. DO coordinates are pixels on THIS square image (also its 0-1000 coordinates). The phone is letterboxed: never target black padding. Do not use coordinates from an earlier original-resolution image."
+        }
+        let reply = try await llm.chat(system: modelSystem, text: prompt, image: modelImage, maxTokens: Self.maxTokens[role] ?? 1000,
                                        temperature: temperature)
         let seconds = ((now() - started) * 100).rounded() / 100
         metrics?.llm(first: reply.firstToken, total: reply.total)
@@ -166,8 +174,10 @@ extension Pointer: Gestures {}
                             "reply": .str(reply.text), "seconds": .num(seconds)]
         if let first = reply.firstToken { rec["first_token_s"] = .num((first * 100).rounded() / 100) }
         if lastActed > 0 { rec["frame_after_action_s"] = .num(((screen.capturedAt - lastActed) * 100).rounded() / 100) }
-        trace?.write(kind: "llm", rec.merging(reply.diagnostics))
-        return (reply.text, seconds, frame)
+        // Source-frame replay uses phone-normalized actions; the separate `look` image is
+        // the exact letterboxed model input. Never draw phone coordinates on the canvas.
+        trace?.write(frame, kind: "llm", rec.merging(reply.diagnostics))
+        return (reply.text, seconds, frame, viewport)
     }
 
     func run() async {
@@ -313,7 +323,7 @@ extension Pointer: Gestures {}
             prompt += "\n\nThe previous plan got stuck (last event: \(pyStr(last["action"])) \(last["reason"]?.str ?? "")):"
                 + "\n\(plan)\nLook at the current screen and plan from here, another way if needed."
         }
-        let (reply, seconds, frame) = try await ask("planner", planner, Prompts.plannerApp + "\n" + AssistiveTouchSpots.rule, prompt)
+        let (reply, seconds, frame, _) = try await ask("planner", planner, Prompts.plannerApp + "\n" + AssistiveTouchSpots.rule, prompt)
         let (en, zh) = Actions.parsePlan(reply)
         plan = en
         record(frame, ["action": .str(stuck ? "replan (stuck)" : "plan"), "plan": .str(en), "plan_zh": .str(zh),
@@ -327,15 +337,23 @@ extension Pointer: Gestures {}
         let history = steps.suffix(8).filter { $0["plan"] == nil }.map { s -> String in
             let effect = s["changed"] == .bool(true) ? " -> screen changed"
                 : s["changed"] == .bool(false) ? " -> screen did NOT change" : ""
-            return String(PyJSON.dumps(s.without(hidden)).prefix(300)) + effect
+            let action = (try? screen?.modelViewport?.canvasAction(s)) ?? s
+            return String(PyJSON.dumps(action.without(hidden)).prefix(300)) + effect
         }.joined(separator: "\n")
         var prompt = "Goal: \(task)\n\nPlan:\n\(plan)\n\nRecent actions:\n\(history.isEmpty ? "(none)" : history)\n\nNext action?"
         var reply = ""
         for attempt in 0..<3 {  // retry unparseable replies, a little less deterministically
-            let (text, seconds, frame) = try await ask("actor", actor, actorPrompt, prompt, temperature: 0.4 * Double(attempt))
+            let (text, seconds, frame, viewport) = try await ask("actor", actor, actorPrompt, prompt, temperature: 0.4 * Double(attempt))
             reply = text
             var acts: [JObject]
             do { acts = try Actions.parseActions(text) } catch { continue }
+            let modelActs = acts
+            do {
+                if let viewport { acts = try acts.map { try viewport.phoneAction($0) } }
+            } catch {
+                prompt += "\nInvalid target: \(error.localizedDescription). Use only positions inside the phone on the current 1000x1000 image."
+                continue  // reject the WHOLE batch before any HID gesture, rather than clamp silently
+            }
             if missed, let last = steps.last, Actions.key(acts[0]) == Actions.key(last) {  // same move that did nothing
                 prompt += "\n\nYou just proposed \(PyJSON.dumps(Actions.key(acts[0]))) again, but it changed nothing last "
                     + "time. Choose a different action (another position, a shorter swipe, or another way)."
@@ -343,7 +361,7 @@ extension Pointer: Gestures {}
             }
             acts[0]["think_s"] = .num(seconds)
             let id = lookID
-            let descriptions = acts.map { String(PyJSON.dumps($0.without(["thought", "thought_zh"])).prefix(1000)) }
+            let descriptions = modelActs.map { String(PyJSON.dumps($0.without(["thought", "thought_zh"])).prefix(1000)) }
             onDecision?(id, descriptions)
             return acts.map { Planned(act: $0, shot: frame, lookID: id) }
         }
