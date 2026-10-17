@@ -10,7 +10,35 @@
 <script>
 const $=id=>document.getElementById(id);let selected=null,following=true,revision=-1,snapshot=null;
 const clock=t=>new Date(t*1000).toLocaleTimeString('zh-CN',{hour12:false});
-function render(state){snapshot=state;$('status').textContent=state.status;const looks=state.events.filter(e=>e.kind==='look');if(following&&looks.length)selected=looks.at(-1).id;const frame=looks.find(e=>e.id===selected);if(frame){$('shot').src='/frame/'+encodeURIComponent(frame.id);$('shot').style.display='block';$('empty').style.display='none';$('picture-title').textContent=frame.role==='planner'?'规划时看到的画面':'执行下一步前的画面';$('meta').textContent=`看图时间 ${clock(frame.time)} · 采集时画面年龄 ${frame.frameAge>=0?frame.frameAge.toFixed(2)+' 秒':'未知'} · 编号 ${frame.id.slice(0,8)}`;}$('follow').setAttribute('aria-pressed',String(following));$('mode').textContent=following?'跟随最新一步（保留最后一次决策截图）':'历史回看 · 已暂停跟随';$('list').replaceChildren();for(const [i,look] of looks.entries()){const b=document.createElement('button');b.setAttribute('aria-pressed',String(selected===look.id));const title=document.createElement('span');title.textContent=`${i+1}. ${look.role==='planner'?'规划看图':'执行看图'} · ${clock(look.time)}`;const small=document.createElement('small');small.textContent=look.task||'当前任务';const action=document.createElement('div');action.className='action';const decisions=state.events.filter(e=>e.id===look.id&&e.kind==='decision').flatMap(e=>e.actions||[]);const executed=state.events.filter(e=>e.id===look.id&&e.kind==='action');action.textContent=decisions.length?`模型选定动作：\n${decisions.join('\n')}\n已执行 ${executed.length} 项`:'正在理解画面，或尚未收到动作记录';b.append(title,small,action);b.onclick=()=>{selected=look.id;following=false;render(snapshot)};$('list').append(b)}}
+function render(state){
+  snapshot=state;$('status').textContent=state.status;
+  const looks=state.events.filter(e=>e.kind==='look');
+  if(following&&looks.length)selected=looks.at(-1).id;
+  const frame=looks.find(e=>e.id===selected);
+  if(frame){
+    const diagnostic=frame.role==='diagnostic';
+    $('shot').src='/frame/'+encodeURIComponent(frame.id);
+    $('shot').alt=diagnostic?'连通性诊断用的 iPhone 真实截图，未发送给模型':'当前模型调用使用的 iPhone 屏幕截图';
+    $('shot').style.display='block';$('empty').style.display='none';
+    $('picture-title').textContent=diagnostic?'真实截图 · 连通性诊断（非模型调用）':frame.role==='planner'?'规划时看到的画面':'执行下一步前的画面';
+    $('meta').textContent=`看图时间 ${clock(frame.time)} · 采集时画面年龄 ${frame.frameAge>=0?frame.frameAge.toFixed(2)+' 秒':'未知'} · 编号 ${frame.id.slice(0,8)}`;
+  }
+  $('follow').setAttribute('aria-pressed',String(following));
+  $('mode').textContent=following?'跟随最新一步（保留最后一次截图）':'历史回看 · 已暂停跟随';
+  $('list').replaceChildren();
+  for(const [i,look] of looks.entries()){
+    const diagnostic=look.role==='diagnostic';
+    const b=document.createElement('button');b.setAttribute('aria-pressed',String(selected===look.id));
+    const title=document.createElement('span');
+    title.textContent=`${i+1}. ${diagnostic?'连通性诊断':look.role==='planner'?'规划看图':'执行看图'} · ${clock(look.time)}`;
+    const small=document.createElement('small');small.textContent=look.task||'当前任务';
+    const action=document.createElement('div');action.className='action';
+    const decisions=state.events.filter(e=>e.id===look.id&&e.kind==='decision').flatMap(e=>e.actions||[]);
+    const executed=state.events.filter(e=>e.id===look.id&&e.kind==='action');
+    action.textContent=diagnostic?'仅检查截图传输：未请求模型，未执行点击。':decisions.length?`模型选定动作：\n${decisions.join('\n')}\n已执行 ${executed.length} 项`:'正在理解画面，或尚未收到动作记录';
+    b.append(title,small,action);b.onclick=()=>{selected=look.id;following=false;render(snapshot)};$('list').append(b);
+  }
+}
 $('follow').onclick=()=>{following=true;if(snapshot)render(snapshot)};
 async function poll(){try{const r=await fetch('/state',{cache:'no-store'});if(!r.ok)throw Error();const state=await r.json();if(state.revision!==revision){revision=state.revision;render(state)}}catch{$('status').textContent='本机预览服务已断开；当前图片仅供回看。'}finally{setTimeout(poll,1000)}}poll();
 </script></html>
