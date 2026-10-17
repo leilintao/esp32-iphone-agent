@@ -1,6 +1,26 @@
 import CoreBluetooth
 import Foundation
 
+/// No stream may resume in the middle of a previous connection's JSON/JPEG event.
+struct PreviewOutbox {
+    private(set) var packets: [Data] = []
+    private(set) var offset = 0
+    mutating func reset() { packets.removeAll(); offset = 0 }
+    mutating func enqueue(_ data: Data) {
+        if packets.count >= 8 { packets.remove(at: 1) }
+        packets.append(data)
+    }
+    func peek(limit: Int) -> Data? {
+        guard let first = packets.first, limit > 0 else { return nil }
+        return first.subdata(in: offset..<min(first.count, offset + limit))
+    }
+    mutating func commit(_ count: Int) {
+        guard let first = packets.first else { return }
+        offset += count
+        if offset == first.count { packets.removeFirst(); offset = 0 }
+    }
+}
+
 /// Opt-in, local Bluetooth mirror of model-call inputs. Independent of the board's video
 /// characteristic: never subscribes a second video consumer or delays the agent for a viewer.
 @MainActor final class LivePreview: NSObject, @preconcurrency CBPeripheralManagerDelegate {
@@ -13,8 +33,7 @@ import Foundation
     private var viewer: CBCentral?
     private var subscribed = Set<UUID>()
     private var output: CBMutableCharacteristic?
-    private var packets: [Data] = []
-    private var offset = 0
+    private var outbox = PreviewOutbox()
     private var latest: Data?
     private var expiryTask: Task<Void, Never>?
 
@@ -38,7 +57,7 @@ import Foundation
         manager?.removeAllServices()
         manager?.delegate = nil
         manager = nil; token = nil; viewer = nil; output = nil
-        subscribed.removeAll(); packets.removeAll(); latest = nil; offset = 0
+        subscribed.removeAll(); outbox.reset(); latest = nil
     }
 
     func publish(_ fields: [String: Any], image: Data? = nil) {
@@ -56,21 +75,15 @@ import Foundation
 
     private func enqueue(_ wire: Data) {
         guard viewer != nil else { return }
-        // Bounded queue. Drop a whole unsent event, NEVER the partially transmitted first event.
-        if packets.count >= 8 { packets.remove(at: 1) }
-        packets.append(wire)
+        outbox.enqueue(wire)
         pump()
     }
 
     private func pump() {
         guard let manager, let output, let viewer, subscribed.contains(viewer.identifier), Date() < expires else { return }
-        while let first = packets.first {
-            let end = min(first.count, offset + viewer.maximumUpdateValueLength)
-            guard end > offset else { return }
-            let chunk = first.subdata(in: offset..<end)
+        while let chunk = outbox.peek(limit: viewer.maximumUpdateValueLength) {
             guard manager.updateValue(chunk, for: output, onSubscribedCentrals: [viewer]) else { return }
-            offset = end
-            if offset == first.count { packets.removeFirst(); offset = 0 }
+            outbox.commit(chunk.count)
         }
     }
 
@@ -94,12 +107,14 @@ import Foundation
         for request in requests {
             guard request.characteristic.uuid == Self.authID, request.offset == 0,
                   let value = request.value, String(data: value, encoding: .utf8) == token,
-                  token != nil, Date() < expires,
-                  viewer == nil || viewer?.identifier == request.central.identifier else {
+                  token != nil, Date() < expires else {
                 peripheral.respond(to: request, withResult: .insufficientAuthorization)
                 continue
             }
             viewer = request.central
+            // Authentication starts a fresh framed stream, even if iOS retained a stale
+            // central after a radio interruption and never delivered didUnsubscribe.
+            outbox.reset()
             peripheral.respond(to: request, withResult: .success)
             if let latest { enqueue(latest) }
             pump()
@@ -113,7 +128,7 @@ import Foundation
 
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didUnsubscribeFrom characteristic: CBCharacteristic) {
         subscribed.remove(central.identifier)
-        if viewer?.identifier == central.identifier { viewer = nil; packets.removeAll(); offset = 0 }
+        if viewer?.identifier == central.identifier { viewer = nil; outbox.reset() }
     }
 
     func peripheralManagerIsReady(toUpdateSubscribers peripheral: CBPeripheralManager) { pump() }

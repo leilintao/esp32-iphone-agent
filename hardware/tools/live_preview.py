@@ -193,7 +193,8 @@ async def watch(events, token, serial_port=None):
                     raise RuntimeError(failure[-1])
         except Exception as error:
             events.set_status("预览断开；旧图仅供回看。请将 ESP32 Agent 打开到前台重连。")
-            print("预览连接中断：", type(error).__name__, flush=True)
+            detail = str(error).replace(token, "<session>")[:200]
+            print("预览连接中断：", type(error).__name__, detail, flush=True)
         await asyncio.sleep(3)
 
 

@@ -156,3 +156,10 @@ the observed 1230 target, calculator 1 location, all gesture types, edge
 rounding, identical preview/model input and whole-batch rejection. The fix
 still requires post-install real-phone acceptance; no 5535 result has been
 verified yet.
+
+The viewer subsequently disconnected during the 1.0.2 test. Re-authentication
+now clears the phone's partially transmitted output before re-sending the latest
+complete image; it can replace a stale central using the same valid session token.
+Tests reproduce partial-old-message reset and bounded, retryable output. The Mac
+prints redacted connection error details rather than hiding the reason. This is
+reconnection hardening, not yet proof that every background disconnect is fixed.

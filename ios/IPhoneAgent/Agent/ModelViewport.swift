@@ -13,7 +13,7 @@ struct ModelViewport {
                          width: width, height: height)
     }
 
-    func image(_ data: Data) throws -> Data {
+    @MainActor func image(_ data: Data) throws -> Data {
         guard content.width > 0, content.height > 0, let source = UIImage(data: data) else {
             throw BlindError(reason: "cannot prepare a valid model screenshot")
         }

@@ -152,11 +152,12 @@ extension Pointer: Gestures {}
         }
         guard let screen, screen.live else { throw BlindError() }  // never let the model act blind
         let frame = screen.frame, started = now()
+        let frameCapturedAt = screen.capturedAt
         let viewport = screen.modelViewport
         let modelImage = try frame.map { data in try viewport?.image(data) ?? data }
         lookID = UUID().uuidString
         let callID = lookID
-        let age = screen.capturedAt > 0 ? max(0, now() - screen.capturedAt) : -1
+        let age = frameCapturedAt > 0 ? max(0, now() - frameCapturedAt) : -1
         onLook?(callID, role, modelImage, age)
         trace?.write(modelImage, kind: "look", ["look_id": .str(callID), "role": .str(role), "frame_age_s": .num(age)])
         onDoing?(.thinking)
@@ -173,7 +174,7 @@ extension Pointer: Gestures {}
         var rec: JObject = ["look_id": .str(callID), "role": .str(role), "model": .str(llm.model), "prompt": .str(prompt),
                             "reply": .str(reply.text), "seconds": .num(seconds)]
         if let first = reply.firstToken { rec["first_token_s"] = .num((first * 100).rounded() / 100) }
-        if lastActed > 0 { rec["frame_after_action_s"] = .num(((screen.capturedAt - lastActed) * 100).rounded() / 100) }
+        if lastActed > 0 { rec["frame_after_action_s"] = .num(((frameCapturedAt - lastActed) * 100).rounded() / 100) }
         // Source-frame replay uses phone-normalized actions; the separate `look` image is
         // the exact letterboxed model input. Never draw phone coordinates on the canvas.
         trace?.write(frame, kind: "llm", rec.merging(reply.diagnostics))
@@ -355,7 +356,8 @@ extension Pointer: Gestures {}
                 continue  // reject the WHOLE batch before any HID gesture, rather than clamp silently
             }
             if missed, let last = steps.last, Actions.key(acts[0]) == Actions.key(last) {  // same move that did nothing
-                prompt += "\n\nYou just proposed \(PyJSON.dumps(Actions.key(acts[0]))) again, but it changed nothing last "
+                let repeated = (try? viewport?.canvasAction(acts[0])) ?? acts[0]
+                prompt += "\n\nYou just proposed \(PyJSON.dumps(Actions.key(repeated))) again, but it changed nothing last "
                     + "time. Choose a different action (another position, a shorter swipe, or another way)."
                 continue
             }

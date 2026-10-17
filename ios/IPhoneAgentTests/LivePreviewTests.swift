@@ -2,6 +2,27 @@ import XCTest
 @testable import IPhoneAgent
 
 @MainActor final class LivePreviewTests: XCTestCase {
+    func testReauthenticationDiscardsPartialOldMessage() {
+        var outbox = PreviewOutbox()
+        outbox.enqueue(Data([0, 0, 0, 8, 1, 2, 3, 4, 5, 6, 7, 8]))
+        outbox.commit(7)
+        XCTAssertEqual(outbox.peek(limit: 4), Data([4, 5, 6, 7]))
+        outbox.reset()
+        outbox.enqueue(Data([0, 0, 0, 2, 9, 10]))
+        XCTAssertEqual(outbox.peek(limit: 4), Data([0, 0, 0, 2]), "new receiver must start at the header, not an old JPEG tail")
+    }
+
+    func testBackpressureRetriesIdenticalPreviewBytesAndKeepsQueueBounded() {
+        var outbox = PreviewOutbox()
+        outbox.enqueue(Data([1, 2, 3, 4]))
+        let first = outbox.peek(limit: 2)
+        XCTAssertEqual(outbox.peek(limit: 2), first)
+        outbox.commit(2)
+        for n in 10..<30 { outbox.enqueue(Data([UInt8(n)])) }
+        XCTAssertEqual(outbox.packets.count, 8)
+        XCTAssertEqual(outbox.peek(limit: 2), Data([3, 4]), "dropping an unsent event must preserve the partial first event")
+    }
+
     func testLookPrecedesModelAndUsesIdenticalBytes() async throws {
         let screen = FakeScreen()
         screen.frame = Data([0xff, 0xd8, 11, 22])
