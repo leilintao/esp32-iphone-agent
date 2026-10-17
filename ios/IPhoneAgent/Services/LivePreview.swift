@@ -42,7 +42,9 @@ struct PreviewOutbox {
     /// A fresh 128-bit token is supplied by the local Mac over the existing debug control link.
     func enable(_ secret: String) -> Bool {
         guard secret.count == 32, secret.allSatisfy({ $0.isHexDigit && $0.isASCII }) else { return false }
-        disable()
+        // A token change must not stop/restart asynchronous advertising either.
+        // Revoke the old session while leaving the transport intact.
+        resetAuthorization()
         token = secret
         expires = Date().addingTimeInterval(3600)
         // Keep one peripheral manager and a stable GATT database across authorizations.
@@ -61,8 +63,12 @@ struct PreviewOutbox {
     }
 
     func disable() {
-        expiryTask?.cancel(); expiryTask = nil
+        resetAuthorization()
         manager?.stopAdvertising()
+    }
+
+    private func resetAuthorization() {
+        expiryTask?.cancel(); expiryTask = nil
         token = nil; viewer = nil
         // Token revocation does not cancel the OS's existing CCCD subscriptions.
         // Keep that transport state; no bytes can leave without a new authenticated viewer.
