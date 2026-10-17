@@ -39,6 +39,9 @@ extension AppModel {
         case "calibrate", "stop", "snap": debugCommand(name)
         case "bench": debugCommand("bench", kb: Int(rest) ?? 256)
         case "status": say(statusSummary)
+        case "preview":
+            if rest == "off" { preview.disable(); say("preview: off") }
+            else { say(preview.enable(rest) ? "preview: enabled for one hour" : "preview: invalid session token") }
         case "log": relayHistory(Int(rest) ?? 50)
         case "mode":
             if let mode = FrameMode(rawValue: rest) { setFrameMode(mode) } else { say("frame mode: \(FrameMode.current.rawValue)") }

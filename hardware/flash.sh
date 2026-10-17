@@ -17,7 +17,7 @@ port() { for p in /dev/cu.usbmodem* /dev/ttyACM*; do [[ -e $p ]] && { echo "$p";
 PORT="" DEFS="" BUILD_ONLY=0
 for a in "$@"; do
   case $a in
-    --debug) DEFS+=" -DDEBUG_SERIAL=1" ;;
+    --debug) DEFS+=" -DAGENT_DEBUG_SERIAL=1" ;;
     --sta) [[ -f hid_bridge/secrets.h ]] || { echo "--sta needs hid_bridge/secrets.h (see secrets.example.h)"; exit 1; }
            DEFS+=" -DSTA_FROM_SECRETS=1" ;;
     --build-only) BUILD_ONLY=1 ;;
@@ -35,7 +35,8 @@ arduino-cli compile -b "$FQBN" "${FLAGS[@]}" --output-dir build hid_bridge
 PORT=${PORT:-$(port)}
 OLD=$PORT
 stty -f "$PORT" 1200 2>/dev/null || stty -F "$PORT" 1200 2>/dev/null || true
-for _ in $(seq 20); do sleep 0.5; PORT=$(port); [[ -n "$PORT" && "$PORT" != "$OLD" ]] && break; done
+for _ in $(seq 20); do sleep 0.5; PORT=$(port || true); [[ -n "$PORT" && "$PORT" != "$OLD" ]] && break; done
 sleep 1  # let the ROM bootloader's serial come up
-PORT=$(port)
+PORT=$(port || true)
+[[ -n "$PORT" ]] || { echo "USB bootloader port did not appear after the 1200-baud reset"; exit 1; }
 arduino-cli upload -b "$FQBN" -p "$PORT" --input-dir build hid_bridge

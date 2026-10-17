@@ -26,7 +26,13 @@ extension AppModel {
         try? await Task.sleep(nanoseconds: 800_000_000)  // "See you later" (DepartureOverlay)
         departing = false
         guard !startCancelled, !Task.isCancelled else { return }
-        await startAgent(task)
+        let job = Task<Void, Never> { [weak self] in
+            guard let self else { return }
+            await self.startAgent(task)
+        }
+        startupJob = job
+        await withTaskCancellationHandler { await job.value } onCancel: { job.cancel() }
+        startupJob = nil
     }
 
     private func startAgent(_ task: String) async {
@@ -51,7 +57,10 @@ extension AppModel {
         // Start is tapped in this app, so: Live Activity, go Home, let the screen settle, THEN the first
         // frame for the planner. Each sub-step is timed in the log.
         let t0 = now()
-        func mark(_ what: String) { DebugLog.write(String(format: "start: %@ (+%.0f ms)", what, (now() - t0) * 1000)) }
+        func mark(_ what: String) {
+            DebugLog.write(String(format: "start: %@ (+%.0f ms)", what, (now() - t0) * 1000))
+            traces.write(kind: "startup", ["phase": .str(what), "video_health": .str(feed.diagnosticState)])
+        }
         traces.start(task: task)  // the run folder exists from here: a failed start keeps its log and video
         startVideo()
         FrameMode.fallback = nil  // each run starts in the chosen mode
@@ -90,7 +99,16 @@ extension AppModel {
             }
             try checkStart()
             mark("video before first frame: \(feed.diagnosticState)")
-            mark("first frame: " + (try await feed.currentFrame()))
+            let progress = Task { [weak self] in
+                while !Task.isCancelled {
+                    guard let self else { return }
+                    homeHint = "正在追赶实时画面…积压 \(board.status?.vpending ?? 0) 帧"
+                    mark("waiting for current video: \(feed.diagnosticState)")
+                    do { try await Task.sleep(nanoseconds: 2_000_000_000) } catch { return }
+                }
+            }
+            defer { progress.cancel(); homeHint = nil }
+            mark("first frame: " + (try await feed.currentFrame(catchUp: 45)))
             mark("video after first frame: \(feed.diagnosticState)")
             try checkStart()
             try agent.start(task, traceStarted: true)
@@ -114,7 +132,7 @@ extension AppModel {
 
     /// Emergency stop: cancel the agent and release the mouse button.
     func stopAgent() async {
-        if starting { startCancelled = true }
+        if starting { startCancelled = true; startupJob?.cancel() }
         answerHelp(.stop)
         mockJob?.cancel()
         agent.stop()
@@ -204,9 +222,10 @@ extension AppModel {
     }
 
     func agentFinished() {
+        preview.publish(["kind": "state", "state": "任务已结束", "task": agent.task])
         ended()
         if let last = agent.steps.last { say("finished: \(last["action"]?.str ?? "") \(last["reason"]?.str ?? last["answer"]?.str ?? "")") }
-        Task { try? await feed.stream(false) }
+        if FrameMode.current == .snap || !feed.mirroring { Task { try? await feed.stream(false) } }
         endBackgroundTask()
     }
 

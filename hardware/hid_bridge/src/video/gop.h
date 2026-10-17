@@ -55,6 +55,12 @@ typedef struct {
 void vchunk_begin(vchunk *c, const uint8_t *data, size_t len, uint8_t flags, uint32_t ts);
 // Writes the next notify into out (room for VCHUNK_HDR + max_payload bytes); 0 when done.
 size_t vchunk_next(vchunk *c, uint8_t *out, size_t max_payload, uint16_t seq);
+// Transactional send: a transient queue failure preserves BOTH cursor and sequence.
+// Returns 1 sent, 0 finished, -1 retry. A receiver must never see a sequence gap
+// just because a packet wasn't queued in the first place.
+typedef bool (*vchunk_sender)(void *ctx, const uint8_t *packet, size_t len);
+int vchunk_send(vchunk *c, uint8_t *out, size_t max_payload, uint16_t *seq,
+                vchunk_sender sender, void *ctx);
 
 #ifdef __cplusplus
 }

@@ -11,6 +11,7 @@ void ble_reply(const String &line);                // queued; sent before any fu
 void ble_status(const String &json);               // latest wins; sent before any further video
 size_t ble_video_room();                           // payload bytes per video notify; 0 = nobody listening
 bool ble_video_send(const uint8_t *p, size_t n);   // waits for free buffers; false = gave up
+uint32_t ble_video_epoch();  // bumps when video subscriptions/connections change
 void ble_unpair();
 
 uint16_t ble_mtu();

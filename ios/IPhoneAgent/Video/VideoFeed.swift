@@ -65,6 +65,7 @@ extension ScreenSource {
     /// A decode error or a lost chunk since the last good frame: the shown frame is stale until the next IDR.
     private(set) var broken = false
     private var snapRevision = 0
+    private var frameBoardMs: UInt32?
     private var clockOffset: Double?  // local s − board s, the smallest seen (≈ the link latency)
     var mirroring = false  // board status says ap == streaming
     var metrics: Metrics?
@@ -113,13 +114,26 @@ extension ScreenSource {
     var frameAge: Double { capturedAt > 0 ? max(0, clock() - capturedAt) : .infinity }
 
     var diagnosticState: String {
-        String(format: "connected=%@ mirroring=%@ stream=%@ frame=%@ broken=%@ age=%.2fs waitIDR=%d overflow=%d",
+        String(format: "connected=%@ mirroring=%@ stream=%@ frame=%@ broken=%@ age=%.2fs waitIDR=%d overflow=%d pending=%d quietTail=%@",
                String(device?.connected ?? false), String(mirroring), String(streamOn), String(frame != nil),
-               String(broken), frameAge, metrics?.board?.vwait ?? -1, metrics?.board?.vover ?? -1)
+               String(broken), frameAge, metrics?.board?.vwait ?? -1, metrics?.board?.vover ?? -1,
+               metrics?.board?.vpending ?? -1, String(verifiedQuietTail))
+    }
+
+    // AirPlay may send NO frames on an unchanged screen. Only a recent board watermark
+    // proving that our decoded frame is its latest AU, with no pending backlog, may
+    // validate an old still. Never replace capture time with receive time.
+    private var verifiedQuietTail: Bool {
+        guard let metrics, metrics.hasRecentStatus, let s = metrics.board,
+              s.ap == "streaming", s.vwait == 0, s.vpending == 0,
+              let up = s.up, let age = s.vage, age >= 0, age < Int(UInt32.max),
+              let frameBoardMs else { return false }
+        let latest = UInt32(truncatingIfNeeded: up - age)
+        return abs(Int(Int32(bitPattern: latest &- frameBoardMs))) <= 5
     }
 
     private func usable(maxAge: Double) -> Bool {
-        frame != nil && !broken && frameAge < min(maxAge, Self.maxFrameAge)
+        frame != nil && !broken && (frameAge < min(maxAge, Self.maxFrameAge) || verifiedQuietTail)
     }
 
     /// Frame width / height (portrait iPhone as a fallback).
@@ -144,6 +158,7 @@ extension ScreenSource {
         frame = nil
         updated = 0
         capturedAt = 0
+        frameBoardMs = nil
         broken = true
         streamOn = false
     }
@@ -162,6 +177,7 @@ extension ScreenSource {
 
     private func publish(_ f: H264Decoder.Frame) {
         frame = f.jpeg
+        frameBoardMs = f.unit.boardMs
         if f.unit.snap { snapRevision += 1 }
         updated = clock()
         capturedAt = clockOffset.map { Double(f.unit.boardMs) / 1000 + $0 } ?? updated

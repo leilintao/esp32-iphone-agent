@@ -4,6 +4,7 @@
 #include <string.h>
 #include "../hid_bridge/src/bplist/bplist.h"
 #include "../hid_bridge/src/video/gop.h"
+#include "../hid_bridge/src/video/pacing.h"
 
 static int fails;
 #define CHECK(c) do { if (!(c)) { fails++; printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); } } while (0)
@@ -164,7 +165,50 @@ static void test_chunker(void) {
   CHECK(got_len == sizeof data && !memcmp(got, data, sizeof data));
 }
 
+struct retry_test { unsigned attempts, sent; uint8_t expected[128]; size_t len; bool retrying; };
+static bool retry_sender(void *ctx, const uint8_t *packet, size_t len) {
+  struct retry_test *t = ctx;
+  t->attempts++;
+  if (!t->retrying && (packet[0] == 254 || packet[0] == 0 || (packet[2] & VF_END))) {
+    memcpy(t->expected, packet, len); t->len = len; t->retrying = true;
+    return false; // first, middle, and final chunk each stall once
+  }
+  if (t->retrying) {
+    CHECK(t->len == len && !memcmp(t->expected, packet, len));
+    t->retrying = false;
+  }
+  t->sent++;
+  return true;
+}
+
+static void test_chunk_retry(void) {
+  uint8_t data[100] = {0}, packet[128];
+  vchunk c;
+  vchunk_begin(&c, data, sizeof data, VF_IDR, 1234);
+  uint16_t seq = 65534;
+  struct retry_test t = {0};
+  for (int result; (result = vchunk_send(&c, packet, 20, &seq, retry_sender, &t)) != 0;) {
+    CHECK(t.attempts <= 12);
+    if (t.attempts > 12) break;
+    if (result < 0) CHECK(seq == (uint16_t)(65534 + t.sent));
+  }
+  CHECK(t.sent == 6 && t.attempts == 9);
+  CHECK(seq == 4 && c.pos == sizeof data);
+}
+
 int main(void) {
+  test_chunk_retry();
+  CHECK(!video_interactive_command("123 ping"));
+  CHECK(!video_interactive_command("123 log start: waiting for video"));
+  CHECK(!video_interactive_command("123 app status"));
+  CHECK(!video_interactive_command("123 status"));
+  CHECK(!video_interactive_command("123\t ping\r\n"));
+  CHECK(!video_interactive_command("123"));
+  CHECK(video_interactive_command("123 move 1 0"));
+  CHECK(video_interactive_command("123 click"));
+  CHECK(video_interactive_command("123 key cmd+h"));
+  CHECK(video_interactive_command("123 release"));
+  CHECK(video_interactive_command("123 pingextra"));
   test_bplist_roundtrip();
   test_bplist_utf16();
   test_gop();

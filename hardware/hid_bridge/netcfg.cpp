@@ -103,7 +103,7 @@ static void startWifi() {
   }
 }
 
-#if DEBUG_SERIAL
+#if AGENT_DEBUG_SERIAL
 static void logWifi(arduino_event_id_t e, arduino_event_info_t info) {
   if (e == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) Serial.printf("wifi: disconnected, reason %d\n", info.wifi_sta_disconnected.reason);
   if (e == ARDUINO_EVENT_WIFI_STA_GOT_IP) Serial.printf("wifi: got ip %s\n", WiFi.localIP().toString().c_str());
@@ -111,7 +111,7 @@ static void logWifi(arduino_event_id_t e, arduino_event_info_t info) {
 #endif
 
 void net_begin() {
-#if DEBUG_SERIAL
+#if AGENT_DEBUG_SERIAL
   WiFi.onEvent(logWifi);
 #endif
   prefs.begin("agent", false);

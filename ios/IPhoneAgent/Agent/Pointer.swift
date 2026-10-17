@@ -35,6 +35,7 @@ import Foundation
     var screenAspect: () -> Double = { 9 / 19.5 }
     /// Last-resort pointer finder on a frame (the vision model), when the pixel diff finds nothing.
     var locate: ((Data) async -> CGPoint?)?
+    var pasteUnicode: ((String) async throws -> Void)?
 
     init(device: HIDDevice, calibrationFile: URL, screen: ScreenSource? = nil) {
         self.device = device
@@ -290,7 +291,14 @@ import Foundation
         try await device.send("scroll \(lines) 0")
     }
 
-    func type(_ text: String) async throws { try await device.send("type \(text)") }
+    func type(_ text: String) async throws {
+        if text.unicodeScalars.contains(where: { $0.value > 127 }) {
+            guard let pasteUnicode else { throw DeviceError(message: "Unicode text requires the iPhone clipboard paste bridge") }
+            try await pasteUnicode(text)
+        } else {
+            try await device.send("type \(text)")
+        }
+    }
     func key(_ combo: String) async throws { try await device.send("key \(combo)") }
     /// The board's consumer-control Home key ("AC Home"), which iOS treats like a keyboard's home key. Boards
     /// without it (older firmware) answer an error: then Cmd+H and the flick up from the home bar (a flick, not

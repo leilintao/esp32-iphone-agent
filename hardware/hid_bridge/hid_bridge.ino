@@ -24,8 +24,8 @@
 const int STEP = 10;      // max pointer delta per report while moving
 const int STEP_MS = 8;    // report interval; constant pace keeps iOS acceleration predictable
 const int HOME_REPORTS = 50;
-#ifndef DEBUG_SERIAL
-#define DEBUG_SERIAL 0  // 1: echo commands and the AirPlay handshake over USB serial
+#ifndef AGENT_DEBUG_SERIAL
+#define AGENT_DEBUG_SERIAL 0  // 1: echo commands and the AirPlay handshake over USB serial
 #endif
 
 const int WATCHDOG_MS = 8000;  // a hung loop (e.g. blocked USB) reboots the board instead of staying offline
@@ -189,20 +189,23 @@ String statusJson(bool full) {
            "{\"up\":%lu,\"rst\":\"%s\",\"heap\":%u,\"psram\":%u,\"usb\":\"%s\",\"net\":\"%s\",\"ip\":\"%s\",\"sta\":%d,"
            "\"ap\":\"%s\",\"w\":%u,\"h\":%u,\"kbps\":%lu,\"fps\":%.1f,\"idr\":%lu,\"gop\":%lu,"
            "\"vwait\":%d,\"vover\":%lu,\"vage\":%lu,\"vlarge\":%lu,"
+           "\"vtxage\":%lu,\"vpending\":%lu,"
            "\"ble\":{\"mtu\":%u,\"phy\":%u,\"kbps\":%lu,\"drop\":%lu,\"rdrop\":%lu,\"n\":%d}}",
            millis(), resetReason(), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), usbState(), net_mode(), net_ip().c_str(), net_peers(),
            apStates[airplay_state()], cfg_width(), cfg_height(), (unsigned long)v.kbps, v.fps, (unsigned long)v.idr_ms,
            (unsigned long)v.gop_bytes, v.wait_idr, (unsigned long)v.overflows,
            (unsigned long)v.age_ms, (unsigned long)v.oversized,
+           (unsigned long)v.tx_age_ms, (unsigned long)v.pending_frames,
            ble_mtu(), ble_phy(), (unsigned long)ble_kbps(), (unsigned long)ble_drops(),
            (unsigned long)ble_reply_drops(), ble_peers());
   if (full) return s;
   // MTU below ~250 (before the MTU exchange): keep only the fields the app needs to stay alive
   snprintf(s, sizeof s, "{\"up\":%lu,\"rst\":\"%s\",\"usb\":\"%s\",\"net\":\"%s\",\"ap\":\"%s\","
-           "\"vwait\":%d,\"vover\":%lu,\"vage\":%lu,\"vlarge\":%lu,\"ble\":{\"mtu\":%u}}",
+           "\"vwait\":%d,\"vover\":%lu,\"vage\":%lu,\"vlarge\":%lu,\"vtxage\":%lu,\"vpending\":%lu,\"ble\":{\"mtu\":%u}}",
            millis(), resetReason(), usbState(), net_mode(), apStates[airplay_state()], v.wait_idr,
-           (unsigned long)v.overflows, (unsigned long)v.age_ms, (unsigned long)v.oversized, ble_mtu());
+           (unsigned long)v.overflows, (unsigned long)v.age_ms, (unsigned long)v.oversized,
+           (unsigned long)v.tx_age_ms, (unsigned long)v.pending_frames, ble_mtu());
   return s;
 }
 
@@ -217,7 +220,7 @@ void statusTask(void *) {
 }
 
 void logLine(const char *msg) {
-#if DEBUG_SERIAL
+#if AGENT_DEBUG_SERIAL
   Serial.printf("[%lu] %s\n", millis(), msg);
 #endif
 }
@@ -239,7 +242,7 @@ void startAirplay() {
 void setup() {
   Serial.begin(115200);
   display_begin();
-#if DEBUG_SERIAL
+#if AGENT_DEBUG_SERIAL
   for (int i = 0; i < 30 && !Serial; i++) delay(100);  // give a serial monitor 3 s to catch the boot lines
 #endif
   mouse.begin();
@@ -290,12 +293,12 @@ void loop() {
   String id = sp < 0 ? line : line.substring(0, sp);
   String rest = sp < 0 ? "" : line.substring(sp + 1);
   rest.trim();
-#if DEBUG_SERIAL
+#if AGENT_DEBUG_SERIAL
   unsigned long started = millis();
 #endif
   String reply = id.toInt() || id == "0" ? board(rest, id) : "err missing request id";
   if (reply.length()) ble_reply(id + " " + reply);
-#if DEBUG_SERIAL
+#if AGENT_DEBUG_SERIAL
   Serial.printf("%s -> %s (%lu ms)\n", line.c_str(), reply.c_str(), millis() - started);
 #endif
 }

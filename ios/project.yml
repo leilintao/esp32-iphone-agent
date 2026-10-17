@@ -28,8 +28,8 @@ targets:
       path: IPhoneAgent/Info.plist
       properties:
         CFBundleDisplayName: ESP32 Agent
-        CFBundleShortVersionString: "1.0.1"
-        CFBundleVersion: "2"
+        CFBundleShortVersionString: "1.0.2"
+        CFBundleVersion: "3"
         CFBundleDevelopmentRegion: en
         CFBundleLocalizations: [en, zh-Hans]
         UILaunchScreen:
@@ -42,7 +42,7 @@ targets:
         UIRequiresFullScreen: true
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         NSBluetoothAlwaysUsageDescription: ESP32 Agent talks to its USB board over Bluetooth to see the screen and move the pointer.
-        UIBackgroundModes: [bluetooth-central]
+        UIBackgroundModes: [bluetooth-central, bluetooth-peripheral]
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         CFBundleDocumentTypes:  # shared run archives (Settings › Privacy › Export) open as imported runs
@@ -75,8 +75,8 @@ targets:
         CFBundleDisplayName: ESP32 Agent
         CFBundleDevelopmentRegion: en
         CFBundleLocalizations: [en, zh-Hans]
-        CFBundleShortVersionString: "1.0.1"
-        CFBundleVersion: "2"
+        CFBundleShortVersionString: "1.0.2"
+        CFBundleVersion: "3"
         IAAppGroup: group.$(IA_BUNDLE_ID)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension

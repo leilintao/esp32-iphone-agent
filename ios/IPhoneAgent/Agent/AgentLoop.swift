@@ -26,6 +26,7 @@ extension Pointer: Gestures {}
     struct Planned {
         var act: JObject
         var shot: Data?  // every action of one reply is drawn on the same screenshot
+        var lookID: String = ""
     }
 
     let phone: Gestures?
@@ -56,6 +57,10 @@ extension Pointer: Gestures {}
     var restore: (() async throws -> Void)?
     var recoveryLimit = Recovery.limit
     var onStep: (() -> Void)?
+    var onLook: ((String, String, Data?, Double) -> Void)?
+    var onDecision: ((String, [String]) -> Void)?
+    var onAction: ((String, String) -> Void)?
+    private var lookID = ""
     /// What the agent is busy with between steps, for the Dynamic Island (looking, thinking, about to act).
     var onDoing: ((Doing) -> Void)?
     enum Doing { case looking, thinking, acting(JObject) }
@@ -147,16 +152,21 @@ extension Pointer: Gestures {}
         }
         guard let screen, screen.live else { throw BlindError() }  // never let the model act blind
         let frame = screen.frame, started = now()
+        lookID = UUID().uuidString
+        let callID = lookID
+        let age = screen.capturedAt > 0 ? max(0, now() - screen.capturedAt) : -1
+        onLook?(callID, role, frame, age)
+        trace?.write(frame, kind: "look", ["look_id": .str(callID), "role": .str(role), "frame_age_s": .num(age)])
         onDoing?(.thinking)
         let reply = try await llm.chat(system: system, text: prompt, image: frame, maxTokens: Self.maxTokens[role] ?? 1000,
                                        temperature: temperature)
         let seconds = ((now() - started) * 100).rounded() / 100
         metrics?.llm(first: reply.firstToken, total: reply.total)
-        var rec: JObject = ["role": .str(role), "model": .str(llm.model), "prompt": .str(prompt),
+        var rec: JObject = ["look_id": .str(callID), "role": .str(role), "model": .str(llm.model), "prompt": .str(prompt),
                             "reply": .str(reply.text), "seconds": .num(seconds)]
         if let first = reply.firstToken { rec["first_token_s"] = .num((first * 100).rounded() / 100) }
         if lastActed > 0 { rec["frame_after_action_s"] = .num(((screen.capturedAt - lastActed) * 100).rounded() / 100) }
-        trace?.write(frame, kind: "llm", rec.merging(reply.diagnostics))
+        trace?.write(kind: "llm", rec.merging(reply.diagnostics))
         return (reply.text, seconds, frame)
     }
 
@@ -259,6 +269,7 @@ extension Pointer: Gestures {}
                 spots += pointerPath(act)
                 pointerAt = spots.last!
             }
+            onAction?(planned.lookID, String(PyJSON.dumps(act.without(["thought", "thought_zh"])).prefix(1000)))
             record(planned.shot, act)
             if name == "done" || name == "fail" { return true }
             let following = i < acts.count - 1 ? acts[i + 1].act["action"]?.str : nil
@@ -331,7 +342,10 @@ extension Pointer: Gestures {}
                 continue
             }
             acts[0]["think_s"] = .num(seconds)
-            return acts.map { Planned(act: $0, shot: frame) }
+            let id = lookID
+            let descriptions = acts.map { String(PyJSON.dumps($0.without(["thought", "thought_zh"])).prefix(1000)) }
+            onDecision?(id, descriptions)
+            return acts.map { Planned(act: $0, shot: frame, lookID: id) }
         }
         throw Actions.ParseError(message: "actor gave no valid action: \(reply.prefix(200))")
     }

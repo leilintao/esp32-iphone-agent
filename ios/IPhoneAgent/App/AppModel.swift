@@ -17,6 +17,7 @@ import UIKit
     let board = BoardLink(mock: MockMode.on)
     let feed = VideoFeed()
     let metrics = Metrics()
+    let preview = LivePreview()
     let traces = MockMode.on
         ? TraceStore(root: FileManager.default.temporaryDirectory.appendingPathComponent("demo-traces"))
         : TraceStore()
@@ -43,6 +44,8 @@ import UIKit
     @Published var departing = false  // the character's take-off before a run
     @Published var starting = false  // includes calibration, departure and the first-frame wait
     var startCancelled = false
+    var startupJob: Task<Void, Never>?
+    private var warmingVideo = false
     /// A banner on Home: the app could not leave by itself (swipe up), or the run waits while the app is in front.
     @Published var homeHint: String?
     var resumeAsked = 0.0  // when Continue was tapped in the app
@@ -74,6 +77,16 @@ import UIKit
                           screen: feed)
         agent = AgentLoop(phone: pointer, screen: feed, actor: nil, planner: nil, trace: traces)
         agent.metrics = metrics
+        agent.onLook = { [weak self] id, role, image, age in
+            self?.preview.publish(["kind": "look", "id": id, "role": role, "frameAge": age,
+                                   "task": self?.agent.task ?? ""], image: image)
+        }
+        agent.onDecision = { [weak self] id, actions in
+            self?.preview.publish(["kind": "decision", "id": id, "actions": actions])
+        }
+        agent.onAction = { [weak self] id, action in
+            self?.preview.publish(["kind": "action", "id": id, "action": action])
+        }
         feed.device = board.commands
         feed.metrics = metrics
 
@@ -83,6 +96,15 @@ import UIKit
         pointer.log = say
         pointer.screenAspect = { DeviceScreen.aspect }
         pointer.locate = { [weak self] jpeg in await self?.locatePointer(jpeg) }
+        pointer.pasteUnicode = { [weak self] text in
+            guard let self else { throw CancellationError() }
+            // USB keyboard reports cannot encode Chinese/emoji. Paste locally on this
+            // iPhone; don't transmit clipboard contents via Universal Clipboard.
+            UIPasteboard.general.setItems([["public.utf8-plain-text": text]],
+                options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(120)])
+            try await Task.sleep(nanoseconds: 50_000_000)
+            try await board.commands.send("key cmd+v")
+        }
         DebugLog.relay = { [weak self] line in
             MainActor.assumeIsolated { if !MockMode.on { self?.board.commands.relayLog(line) } }
         }
@@ -95,6 +117,7 @@ import UIKit
             if let up = s.up { self?.feed.boardClock(ms: up) }
             self?.metrics.status(s)
             self?.logStatus(s)
+            self?.warmVideoIfNeeded()
         }
         board.onLinkUp = { [weak self] in
             guard let self else { return }
@@ -140,6 +163,20 @@ import UIKit
         runs.reload()
         handleLaunchArguments()
         publishWidget()
+    }
+
+    /// Start receiving when mirroring begins, not only after Start was tapped. Otherwise
+    /// every cold run first downloads the entire setup/control-center history over BLE.
+    private func warmVideoIfNeeded() {
+        guard !MockMode.on, FrameMode.current == .stream, board.connected, feed.mirroring,
+              !feed.streamOn, !warmingVideo else { return }
+        warmingVideo = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { warmingVideo = false }
+            do { try await feed.stream(true); DebugLog.write("video: mirror connected, live stream warmed") }
+            catch { DebugLog.write("video: warm stream failed: \(error.localizedDescription)") }
+        }
     }
 
     /// Every second: metrics; a suspension note; the stream's numbers every 10 s while a run goes.

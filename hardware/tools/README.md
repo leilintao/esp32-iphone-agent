@@ -48,6 +48,23 @@ uv run hardware/tools/board_test.py cmd "res 480 1040" "fps 5"   # any command l
 ```
 `ffplay hardware/tools/out/stream.h264` plays the stream.
 
+## Model decision screenshots (App 1.0.2+)
+
+```bash
+uv run hardware/tools/live_preview.py
+```
+
+Open ESP32 Agent on the iPhone first and wait for the Mac to say the screenshot
+viewer is connected. Then switch to the target app and run your task as usual.
+The viewer at `http://127.0.0.1:8765` shows the actual JPEG used by each model
+call, its timestamp/age and the actions associated with that same frame.
+It is step-by-step, not a continuous screen recording. Click a step to inspect
+history; “跟随最新一步” resumes following. Ctrl-C stops sharing. This uses a
+separate phone-to-Mac BLE link, not the board's VIDEO characteristic. Screenshots
+stay in local process memory; no additional cloud or signing account is needed.
+The feature needs the new IPA; a page with no screenshots is NOT evidence that
+the old app supports preview. See `docs/video-startup-recovery.md` for test limits.
+
 ## 4. Back to the iPhone
 
 Reflash without `--sta` (`hardware/flash.sh`), then plug the board into the iPhone.

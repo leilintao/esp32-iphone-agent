@@ -8,6 +8,33 @@ final class VideoTests: XCTestCase {
                           unit: AccessUnit(data: Data(), idr: true, config: false, snap: snap, boardMs: ms))
     }
 
+    @MainActor func testOldStillNeedsExactRecentBoardWatermarkAndNoBacklog() async throws {
+        var time = 100.0
+        let decoder = H264Decoder()
+        let feed = VideoFeed(decoder: decoder, clock: { time })
+        let device = FakeDevice()
+        let metrics = Metrics()
+        feed.device = device; feed.metrics = metrics; feed.mirroring = true
+        feed.boardClock(ms: 30_000)
+        decoder.onFrame?(decoded(ms: 30_000, snap: false))
+        try await Task.sleep(nanoseconds: 20_000_000)
+        time = 120
+        XCTAssertFalse(feed.live)
+        metrics.status(BoardStatus(up: 50_000, ap: "streaming", vwait: 0, vage: 20_000, vpending: 0))
+        XCTAssertTrue(feed.live, "unchanged calculator screen is current, not a transport failure")
+        XCTAssertEqual(feed.frameAge, 20, accuracy: 0.001, "must not falsify capture timestamp")
+        metrics.status(BoardStatus(up: 50_000, ap: "streaming", vwait: 0, vage: 20_000, vpending: 1))
+        XCTAssertFalse(feed.live, "a pending AU must never count as a quiet tail")
+        metrics.status(BoardStatus(up: 50_000, ap: "streaming", vwait: 0, vage: 19_000, vpending: 0))
+        XCTAssertFalse(feed.live, "board has a different, newer frame")
+        metrics.status(BoardStatus(up: 50_000, ap: "streaming", vwait: 1, vage: 20_000, vpending: 0))
+        XCTAssertFalse(feed.live, "keyframe failure overrides a matching timestamp")
+        metrics.status(BoardStatus(up: 50_000, ap: "streaming", vwait: 0, vage: 20_000, vpending: 0))
+        XCTAssertTrue(feed.live)
+        try await Task.sleep(nanoseconds: 3_050_000_000)
+        XCTAssertFalse(feed.live, "old cached status isn't proof of a current still frame")
+    }
+
     @MainActor func testLogged1358SecondOldSnapIsNotReportedAsReady() async {
         let decoder = H264Decoder()
         let feed = VideoFeed(decoder: decoder, clock: { 100 })

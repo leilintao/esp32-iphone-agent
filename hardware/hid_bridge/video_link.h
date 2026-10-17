@@ -15,5 +15,6 @@ struct VideoStats {
   float fps;
   uint32_t overflows, age_ms, oversized;
   bool wait_idr;
+  uint32_t tx_age_ms, pending_frames;
 };
 VideoStats video_stats();

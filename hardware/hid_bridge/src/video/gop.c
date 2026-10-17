@@ -84,3 +84,16 @@ size_t vchunk_next(vchunk *c, uint8_t *out, size_t max_payload, uint16_t seq) {
   out[2] = flags;
   return o + n;
 }
+
+int vchunk_send(vchunk *c, uint8_t *out, size_t room, uint16_t *seq,
+                vchunk_sender sender, void *ctx) {
+  vchunk before = *c;
+  size_t len = vchunk_next(c, out, room, *seq);
+  if (!len) return 0;
+  if (!sender(ctx, out, len)) {
+    *c = before;
+    return -1;
+  }
+  (*seq)++;
+  return 1;
+}

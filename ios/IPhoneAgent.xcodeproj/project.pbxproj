@@ -42,6 +42,7 @@
 		607B1520E654F13F1F304F4D /* DeviceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23A9A9D917B2B2FC534E7DBA /* DeviceTests.swift */; };
 		63B0CAE819339D8FC103AC8B /* VideoFeed.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9615E8664A5DC600B1B97E0 /* VideoFeed.swift */; };
 		63CB6644E6517C6B12F3E0AB /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 1C25AC81D9FBF6073FDD1851 /* Localizable.xcstrings */; };
+		665784C3C747C667E9B9E480 /* LivePreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBF843AC91EA1EBD62ED4D15 /* LivePreview.swift */; };
 		66CADEEED2A075ECD5070131 /* BoardCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02C2C2C9EBE006E896050646 /* BoardCommands.swift */; };
 		6787B6280DD3923D995F8611 /* AgentIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0278B11885CA8C4A96C96531 /* AgentIntents.swift */; };
 		6CDEB83B98075E73AEA52F13 /* ShareTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA04712864CA08DA02B08369 /* ShareTests.swift */; };
@@ -67,6 +68,7 @@
 		90594045D55F83E5EEE53574 /* ReviewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 794E46A6A28E406A3D606661 /* ReviewTests.swift */; };
 		948C0D1F80207A8E5874D943 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DCAEE3FDF94357F8875E473 /* HomeView.swift */; };
 		962068E4EB7D31C8E1E0A9F2 /* PromptTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F775C2B833B33E951A629957 /* PromptTests.swift */; };
+		969E104A9D208ECD56AC5047 /* LivePreviewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D621703F0434227A340CBD4 /* LivePreviewTests.swift */; };
 		96C08C1CFEECA69484811137 /* StatusChips.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96BDA430E0C54DC956DE9366 /* StatusChips.swift */; };
 		99D64CF9B896616382FC8A0E /* AgentActivity.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A11E0FF01881451EBB3D18FF /* AgentActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		9BA8ABE4398546618D6AE675 /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F3122E7A1DB53F3BFCCFD06 /* DiagnosticsView.swift */; };
@@ -195,6 +197,7 @@
 		98111895572CDFBCBA4C5268 /* Shared.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Shared.xcconfig; sourceTree = "<group>"; };
 		98425438C4A7C1EB827CDD2C /* IPhoneAgent.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = IPhoneAgent.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		99381FBF82EA7EB76556866E /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
+		9D621703F0434227A340CBD4 /* LivePreviewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePreviewTests.swift; sourceTree = "<group>"; };
 		A11E0FF01881451EBB3D18FF /* AgentActivity.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = AgentActivity.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		A409B3696F547E712B4D4D14 /* PokeableFace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PokeableFace.swift; sourceTree = "<group>"; };
 		A54BC007EE5C64A13CDEE9EE /* IslandTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandTests.swift; sourceTree = "<group>"; };
@@ -209,6 +212,7 @@
 		C12C6B350F7AFD555CE0B8EA /* HotspotJoin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotspotJoin.swift; sourceTree = "<group>"; };
 		C5099810C37BB0AD66EDC8C8 /* TouchProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchProbe.swift; sourceTree = "<group>"; };
 		C70A2F48B5948F180DF1450C /* TouchCalibration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchCalibration.swift; sourceTree = "<group>"; };
+		CBF843AC91EA1EBD62ED4D15 /* LivePreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePreview.swift; sourceTree = "<group>"; };
 		CD4270DF66937405FC86B145 /* VideoAssembler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoAssembler.swift; sourceTree = "<group>"; };
 		CFB37456C763ADFEF9E577A2 /* IslandStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandStatus.swift; sourceTree = "<group>"; };
 		D17A722B1C48BF8FBF8B4222 /* OnboardingDemos.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingDemos.swift; sourceTree = "<group>"; };
@@ -298,6 +302,7 @@
 				DCDFF66F3082E46B88130ABC /* AgentTests.swift */,
 				23A9A9D917B2B2FC534E7DBA /* DeviceTests.swift */,
 				A54BC007EE5C64A13CDEE9EE /* IslandTests.swift */,
+				9D621703F0434227A340CBD4 /* LivePreviewTests.swift */,
 				F071F3E4D7B82DE70AE75A81 /* LLMTests.swift */,
 				F775C2B833B33E951A629957 /* PromptTests.swift */,
 				8F2E6CFBDF20832FF9626D99 /* RecoveryTests.swift */,
@@ -393,6 +398,7 @@
 			isa = PBXGroup;
 			children = (
 				0B88A1538529C9674B323370 /* DebugLog.swift */,
+				CBF843AC91EA1EBD62ED4D15 /* LivePreview.swift */,
 				DCDA925D0FFD42810895573C /* LLMClient.swift */,
 				4D9FABC284798F9949C1A8EF /* LogUploader.swift */,
 				B9719A5EC1DD7C5033CC8DF5 /* Metrics.swift */,
@@ -594,6 +600,7 @@
 				607B1520E654F13F1F304F4D /* DeviceTests.swift in Sources */,
 				2CF6A30C3D72E05EEBC6FFED /* IslandTests.swift in Sources */,
 				48100361D2ECFE7E36F83F9D /* LLMTests.swift in Sources */,
+				969E104A9D208ECD56AC5047 /* LivePreviewTests.swift in Sources */,
 				962068E4EB7D31C8E1E0A9F2 /* PromptTests.swift in Sources */,
 				42A1AE0EA1AC18461ED8F33B /* RecoveryTests.swift in Sources */,
 				90594045D55F83E5EEE53574 /* ReviewTests.swift in Sources */,
@@ -640,6 +647,7 @@
 				A42DB537742861FF668DB34A /* JSON.swift in Sources */,
 				BB3C60862112DB87D3555158 /* LLMClient.swift in Sources */,
 				AD702230192ADBF827044490 /* LiveActivity.swift in Sources */,
+				665784C3C747C667E9B9E480 /* LivePreview.swift in Sources */,
 				F2FFDB2986493F65EB6A9738 /* LogUploader.swift in Sources */,
 				7B684FAA8B218BB9798F9EC3 /* Metrics.swift in Sources */,
 				B356EECAFE045249704E63FD /* MockMode.swift in Sources */,

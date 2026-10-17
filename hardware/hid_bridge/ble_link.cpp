@@ -12,6 +12,7 @@
 #include <NimBLEDevice.h>
 #include "nimble/nimble/host/include/host/ble_hs.h"
 #include "netcfg.h"
+#include "src/video/pacing.h"
 
 static_assert(MYNEWT_VAL(MSYS_1_BLOCK_COUNT) == 64 && MYNEWT_VAL(MSYS_1_BLOCK_SIZE) == 320,
               "nimble_cfg.h not applied: build with hardware/flash.sh");
@@ -51,9 +52,10 @@ static volatile bool subscribed[MAX_PEERS][CH_COUNT];
 static uint32_t winStart, winBytes;  // touched by the video task only
 static volatile uint32_t kbps;
 static std::atomic<uint32_t> drops, replyDrops;
-static volatile uint32_t lastCmdMs;  // last `cmd` write: replies are expected, keep video's share small
+static std::atomic<uint32_t> videoEpoch;
+static volatile uint32_t lastCmdMs;  // last interactive command, not routine ping/debug traffic
 
-#if DEBUG_SERIAL
+#if AGENT_DEBUG_SERIAL
 #define BLE_LOG(...) Serial.printf("ble: " __VA_ARGS__)
 #else
 #define BLE_LOG(...) ((void)0)
@@ -117,6 +119,7 @@ class ServerCb : public NimBLEServerCallbacks {
   void onDisconnect(NimBLEServer *s, NimBLEConnInfo &ci, int reason) override {
     int i = slotOf(ci.getConnHandle());
     if (i >= 0) {
+      if (subscribed[i][CH_VIDEO]) videoEpoch++;
       for (int c = 0; c < CH_COUNT; c++) subscribed[i][c] = false;
       peers[i] = -1;
     }
@@ -139,7 +142,7 @@ class CharCb : public NimBLECharacteristicCallbacks {
     char line[CMD_MAX] = {0};
     v.trim();
     strncpy(line, v.c_str(), CMD_MAX - 1);
-    lastCmdMs = millis();
+    if (video_interactive_command(line)) lastCmdMs = millis();
     if (line[0]) xQueueSend(cmdQueue, line, 0);  // full queue: the app times out and retries
   }
   void onRead(NimBLECharacteristic *c, NimBLEConnInfo &ci) override {
@@ -149,7 +152,11 @@ class CharCb : public NimBLECharacteristicCallbacks {
   }
   void onSubscribe(NimBLECharacteristic *c, NimBLEConnInfo &ci, uint16_t sub) override {
     int i = indexOf(c), p = sub & 1 ? slotFor(ci.getConnHandle()) : slotOf(ci.getConnHandle());
-    if (i >= 0 && p >= 0) subscribed[p][i] = sub & 1;
+    if (i >= 0 && p >= 0) {
+      bool on = (sub & 1) != 0;
+      if (i == CH_VIDEO && subscribed[p][i] != on) videoEpoch++;
+      subscribed[p][i] = on;
+    }
     BLE_LOG("conn %u: %s %s\n", ci.getConnHandle(), sub & 1 ? "subscribed" : "unsubscribed",
             i == CH_REPLY ? "reply" : i == CH_STATUS ? "status" : "video");
   }
@@ -157,7 +164,7 @@ class CharCb : public NimBLECharacteristicCallbacks {
 
 static CharCb charCb;
 
-#if DEBUG_SERIAL
+#if AGENT_DEBUG_SERIAL
 static int onGap(ble_gap_event *e, void *) {  // NimBLEServerCallbacks has no data-length event
   if (e->type == BLE_GAP_EVENT_DATA_LEN_CHG)
     BLE_LOG("data length tx %u B / %u us, rx %u B / %u us\n", e->data_len_chg.max_tx_octets,
@@ -259,7 +266,7 @@ void ble_begin(const String &name) {
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
   NimBLEDevice::setSecurityInitKey(BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID);
   NimBLEDevice::setSecurityRespKey(BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID);
-#if DEBUG_SERIAL
+#if AGENT_DEBUG_SERIAL
   NimBLEDevice::setCustomGapHandler(onGap);
 #endif
 
@@ -323,7 +330,17 @@ void ble_status(const String &json) {
   xSemaphoreGive(statusLock);
 }
 
-size_t ble_video_room() { return anySubscribed(CH_VIDEO) ? ble_mtu() - 3 - 3 : 0; }
+size_t ble_video_room() {
+  // A read-only Mac diagnostic peer must not shrink the iPhone's video chunks.
+  uint16_t mtu = 0;
+  for (int i = 0; i < MAX_PEERS; i++) {
+    int h = peers[i];
+    if (h < 0 || !subscribed[i][CH_VIDEO]) continue;
+    uint16_t m = server->getPeerMTU(h);
+    if (m && (!mtu || m < mtu)) mtu = m;
+  }
+  return mtu > 6 ? mtu - 6 : 0;
+}
 
 bool ble_video_send(const uint8_t *p, size_t n) {
   if (!notifyRaw(CH_VIDEO, p, n, VIDEO_TIMEOUT_MS)) {
@@ -342,6 +359,7 @@ bool ble_video_send(const uint8_t *p, size_t n) {
 
 uint32_t ble_kbps() { return millis() - winStart > 2000 ? 0 : kbps; }
 uint32_t ble_drops() { return drops; }
+uint32_t ble_video_epoch() { return videoEpoch.load(); }
 uint32_t ble_reply_drops() { return replyDrops; }
 int ble_peers() { return peerCount(); }
 

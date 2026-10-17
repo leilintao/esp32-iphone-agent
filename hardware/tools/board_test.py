@@ -75,10 +75,11 @@ class Board:
         self.video = Reassembler()
         self.write_lock = asyncio.Lock()  # bleak/CoreBluetooth: one write-with-response per characteristic at a time
 
-    async def start(self):
+    async def start(self, video=True):
         await self.c.start_notify(REPLY, self._on_reply)
         await self.c.start_notify(STATUS, self._on_status)
-        await self.c.start_notify(VIDEO, lambda _, d: self.video.feed(bytes(d)))
+        if video:
+            await self.c.start_notify(VIDEO, lambda _, d: self.video.feed(bytes(d)))
 
     def _on_reply(self, _, data: bytearray):
         text = data.decode(errors="replace")
@@ -256,7 +257,7 @@ async def main():
 
     async with BleakClient(await find_board(a.scan), timeout=20) as client:
         b = Board(client)
-        await b.start()
+        await b.start(video=a.test not in ("info", "app") or (a.test == "app" and a.snap_every > 0))
         print("mtu:", client.mtu_size)
         if a.test in ("all", "info"):
             print("net:", await b.net())

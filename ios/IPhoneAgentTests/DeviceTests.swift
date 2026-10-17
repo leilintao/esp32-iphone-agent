@@ -111,6 +111,29 @@ import XCTest
         XCTAssertEqual(merged.vlarge, 2)
     }
 
+    func testVideoDeliveryWatermarksAreMerged() {
+        let full = BoardStatus(vtxage: 300, vpending: 40)
+        let short = BoardStatus(vtxage: 20, vpending: 0)
+        XCTAssertEqual(full.merged(with: short).vpending, 0)
+        XCTAssertEqual(full.merged(with: short).vtxage, 20)
+        XCTAssertEqual(full.merged(with: BoardStatus()).vpending, 40)
+    }
+
+    func testUnicodeIsPastedLocallyButASCIIStillUsesHID() async throws {
+        let device = FakeDevice()
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let pointer = Pointer(device: device, calibrationFile: file)
+        var pasted: [String] = []
+        pointer.pasteUnicode = { pasted.append($0) }
+        try await pointer.type("123*45")
+        try await pointer.type("白板🙂")
+        XCTAssertEqual(device.sent, ["type 123*45"])
+        XCTAssertEqual(pasted, ["白板🙂"])
+        pointer.pasteUnicode = nil
+        do { try await pointer.type("中文"); XCTFail("must not silently accept untypeable UTF-8") } catch {}
+        XCTAssertEqual(device.sent.count, 1)
+    }
+
     func testPointerRehomesEveryTenGestures() async throws {
         let device = FakeDevice()
         let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")

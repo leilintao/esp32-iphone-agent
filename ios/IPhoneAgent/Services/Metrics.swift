@@ -35,6 +35,7 @@ import Foundation
     private var lastIDR: Double?
     private var lastTick = now()
     private var lastStatus: Double?
+    var hasRecentStatus: Bool { lastStatus.map { now() - $0 < 3 } ?? false }
 
     func status(_ s: BoardStatus) {
         board = s
