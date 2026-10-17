@@ -122,8 +122,10 @@ struct PreviewOutbox {
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didSubscribeTo characteristic: CBCharacteristic) {
+        // The same Mac may reconnect with its previous central UUID. Never pump the
+        // old stream on subscribe before its new receiver has authenticated.
+        if viewer?.identifier == central.identifier { viewer = nil; outbox.reset() }
         subscribed.insert(central.identifier)
-        pump()
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didUnsubscribeFrom characteristic: CBCharacteristic) {
