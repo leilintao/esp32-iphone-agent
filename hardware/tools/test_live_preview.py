@@ -62,6 +62,38 @@ class PreviewTests(unittest.TestCase):
 
 
 class ConnectionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_name_only_advertisement_fallback_preserves_service_filter_first(self):
+        phone = object()
+        find = AsyncMock(side_effect=[None, phone])
+        bleak = types.SimpleNamespace(BleakScanner=types.SimpleNamespace(find_device_by_filter=find))
+        with patch.dict("sys.modules", {"bleak": bleak}):
+            self.assertIs(await preview.find_preview_phone(), phone)
+        self.assertEqual(find.await_args_list[0].kwargs["service_uuids"], [preview.SERVICE])
+        self.assertNotIn("service_uuids", find.await_args_list[1].kwargs)
+        predicate = find.await_args_list[1].args[0]
+        self.assertTrue(predicate(None, types.SimpleNamespace(local_name="Tianbao Preview", service_uuids=[])))
+        self.assertFalse(predicate(None, types.SimpleNamespace(local_name="Other phone", service_uuids=[])))
+
+    async def test_missing_service_never_receives_session_token(self):
+        client = MagicMock()
+        client.services.get_service.return_value = None
+        client.start_notify = AsyncMock()
+        client.write_gatt_char = AsyncMock()
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=client)
+        context.__aexit__ = AsyncMock(return_value=False)
+        bleak = types.SimpleNamespace(BleakClient=MagicMock(return_value=context),
+            BleakScanner=types.SimpleNamespace(find_device_by_filter=AsyncMock(return_value=object())))
+        state = preview.Events()
+        with patch.dict("sys.modules", {"bleak": bleak}), \
+             patch.object(preview, "preview_control", AsyncMock()), \
+             patch.object(preview.asyncio, "sleep", AsyncMock(side_effect=asyncio.CancelledError)):
+            with self.assertRaises(asyncio.CancelledError):
+                await preview.watch(state, "a" * 32)
+        self.assertIn("核对截图服务", state.snapshot()["status"])
+        client.start_notify.assert_not_awaited()
+        client.write_gatt_char.assert_not_awaited()
+
     async def test_phone_confirmation_reaches_viewer_without_model_or_hid(self):
         client = MagicMock()
         transport = {}

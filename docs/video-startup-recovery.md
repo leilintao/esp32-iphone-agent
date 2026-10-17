@@ -185,3 +185,12 @@ identify it as a connectivity check, not a model call. It invokes neither the
 model nor HID. Restore AirPlay mirroring before using it. Real model `look` events
 remain the exact bytes passed to the model. This release still requires real-phone
 foreground, background and reconnect acceptance; passing tests is not acceptance.
+
+On the installed 1.0.4 (5), phone logs confirmed radio powered on, service
+registration and advertising success. A broad Mac scan observed local name
+`Tianbao Preview` with an empty advertised service UUID list. Discovery now tries
+the service filter first, then accepts that exact advertised local name, and
+checks the connected GATT service before transmitting authorization. A real
+foreground connection completed subscription, authorization and a framed return
+confirmation. Screenshot/background/reconnect acceptance remains pending until
+mirroring is restored; the confirmation event alone is not screenshot success.

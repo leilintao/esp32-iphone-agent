@@ -157,6 +157,20 @@ async def preview_control(value, serial_port=None):
         await asyncio.sleep(0.5)
 
 
+async def find_preview_phone(timeout=10):
+    from bleak import BleakScanner
+    # Some foreground iPhone advertisements contain only the local name; the
+    # requested 128-bit service is absent, so an OS service filter misses them.
+    filtered = min(3, timeout / 2)
+    phone = await BleakScanner.find_device_by_filter(
+        lambda _, __: True, service_uuids=[SERVICE], timeout=filtered)
+    if phone is not None:
+        return phone
+    return await BleakScanner.find_device_by_filter(
+        lambda _, ad: ad.local_name == "Tianbao Preview" or SERVICE in ad.service_uuids,
+        timeout=max(0.1, timeout - filtered))
+
+
 async def watch(events, token, serial_port=None):
     from bleak import BleakClient, BleakScanner
     await preview_control(token, serial_port)
@@ -168,8 +182,7 @@ async def watch(events, token, serial_port=None):
     discovery_deadline = time.monotonic() + 180
     while phone is None and time.monotonic() < discovery_deadline:
         events.set_status("等待 iPhone 截图服务；请保持新版 ESP32 Agent 在前台")
-        phone = await BleakScanner.find_device_by_filter(
-            lambda _, __: True, service_uuids=[SERVICE], timeout=10)
+        phone = await find_preview_phone()
     if phone is None:
         raise RuntimeError("仍未发现 iPhone 截图服务；预览尚未连通，请保持 App 在前台并检查手机蓝牙权限")
     while True:
@@ -190,6 +203,9 @@ async def watch(events, token, serial_port=None):
                 lost.set()
         try:
             async with BleakClient(phone, disconnected_callback=lambda _: lost.set(), timeout=15) as client:
+                stage = "核对截图服务"
+                if client.services.get_service(SERVICE) is None:
+                    raise RuntimeError("该蓝牙设备没有截图服务；未发送授权")
                 stage = "订阅截图通知"
                 print("预览：蓝牙已连接，正在订阅截图通知。", flush=True)
                 await client.start_notify(DATA, receive)
@@ -211,8 +227,7 @@ async def watch(events, token, serial_port=None):
         await asyncio.sleep(3)
         # A reinstalled app or re-created peripheral can invalidate the old peripheral
         # instance. Re-scan rather than repeatedly connecting the same stale object.
-        rediscovered = await BleakScanner.find_device_by_filter(
-            lambda _, __: True, service_uuids=[SERVICE], timeout=10)
+        rediscovered = await find_preview_phone()
         if rediscovered is not None:
             phone = rediscovered
 
