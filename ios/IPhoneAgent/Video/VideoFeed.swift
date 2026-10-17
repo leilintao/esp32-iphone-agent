@@ -8,6 +8,7 @@ import UIKit
     var updated: Double { get }
     var capturedAt: Double { get }
     var aspect: Double { get }
+    var unavailableReason: String? { get }
     /// After a gesture that ended at `since`: wait until the screen shows its result (and fetch it, in snap mode).
     func afterAction(since: Double) async
 }
@@ -26,6 +27,7 @@ enum FrameMode: String {
 }
 
 extension ScreenSource {
+    var unavailableReason: String? { live ? nil : "no phone screen: start Screen Mirroring first" }
     func afterAction(since: Double) async { await settled() }
 
     /// Wait until the screen stops changing (AirPlay only sends frames on change). Mid-animation frames are big and
@@ -69,9 +71,13 @@ extension ScreenSource {
     weak var device: HIDDevice?
 
     private var assembler = VideoAssembler()
-    private let decoder = H264Decoder()
+    private let decoder: H264Decoder
+    private let clock: () -> Double
+    static let maxFrameAge: Double = 10
 
-    init() {
+    init(decoder: H264Decoder = H264Decoder(), clock: @escaping () -> Double = now) {
+        self.decoder = decoder
+        self.clock = clock
         decoder.onFrame = { [weak self] f in DispatchQueue.main.async { self?.publish(f) } }
         decoder.onError = { [weak self] msg in
             DispatchQueue.main.async {
@@ -83,12 +89,37 @@ extension ScreenSource {
         }
     }
 
-    var live: Bool {
-        mirroring && usable(maxAge: 10) && (device?.connected ?? false) && metrics?.board?.vwait != 1
+    var live: Bool { unavailableReason == nil }
+
+    var unavailableReason: String? {
+        if let reason = transportProblem { return reason }
+        if broken { return "视频解码或传输中断，正在等待可解码的新画面；请重新开启屏幕镜像" }
+        if frame == nil { return "已连接投屏，但尚未收到可解码的手机画面" }
+        if !usable(maxAge: Self.maxFrameAge) {
+            return String(format: "画面延迟 %.2f 秒，超过 %.0f 秒安全上限；请重新开启屏幕镜像以清除积压", frameAge, Self.maxFrameAge)
+        }
+        return nil
+    }
+
+    private var transportProblem: String? {
+        if device?.connected != true { return "开发板蓝牙未连接，请先连接开发板" }
+        if !mirroring { return "屏幕镜像尚未连接，请开启屏幕镜像并选择 ESP32 Agent" }
+        if metrics?.board?.vwait == 1 {
+            return "视频正在等待关键帧（缓存溢出次数：\(metrics?.board?.vover ?? 0)），请停止并重新开启屏幕镜像"
+        }
+        return nil
+    }
+
+    var frameAge: Double { capturedAt > 0 ? max(0, clock() - capturedAt) : .infinity }
+
+    var diagnosticState: String {
+        String(format: "connected=%@ mirroring=%@ stream=%@ frame=%@ broken=%@ age=%.2fs waitIDR=%d overflow=%d",
+               String(device?.connected ?? false), String(mirroring), String(streamOn), String(frame != nil),
+               String(broken), frameAge, metrics?.board?.vwait ?? -1, metrics?.board?.vover ?? -1)
     }
 
     private func usable(maxAge: Double) -> Bool {
-        frame != nil && !broken && now() - capturedAt < maxAge
+        frame != nil && !broken && frameAge < min(maxAge, Self.maxFrameAge)
     }
 
     /// Frame width / height (portrait iPhone as a fallback).
@@ -119,7 +150,7 @@ extension ScreenSource {
 
     /// A board timestamp (status `up`, or a streamed unit) just arrived: keep the smallest offset.
     func boardClock(ms: Int) {
-        let offset = now() - Double(ms) / 1000
+        let offset = clock() - Double(ms) / 1000
         clockOffset = min(clockOffset ?? offset, offset)
     }
 
@@ -132,7 +163,7 @@ extension ScreenSource {
     private func publish(_ f: H264Decoder.Frame) {
         frame = f.jpeg
         if f.unit.snap { snapRevision += 1 }
-        updated = now()
+        updated = clock()
         capturedAt = clockOffset.map { Double(f.unit.boardMs) / 1000 + $0 } ?? updated
         broken = false
         if size.width != CGFloat(f.width) || size.height != CGFloat(f.height) {
@@ -150,24 +181,46 @@ extension ScreenSource {
         30
     }
 
-    /// A current frame for the model. While the board streams, the live stream has it (an IDR comes every
-    /// ~2 s): use a frame younger than `maxAge`, or wait for the next one. Snap only as a fallback, retried
-    /// only once, with a bounded timeout. Returns where the frame came from, for the log.
+    /// Prefer a very recent live frame. If delivery is progressing, let it catch up before requesting
+    /// a whole GOP again. A SNAP ACK/decoded frame is not proof of freshness: after a slow replay,
+    /// wait for the live tail, and only return a frame which passes the SAME check as AgentLoop.start.
     @discardableResult
-    func currentFrame(maxAge: Double = 1, wait: Double = 3) async throws -> String {
-        if metrics?.board?.vwait == 1 {
-            throw DeviceError(message: "视频正在等待关键帧（缓存溢出次数：\(metrics?.board?.vover ?? 0)），请停止并重新开启屏幕镜像")
-        }
-        if streamOn && mirroring {
+    func currentFrame(maxAge: Double = 1, wait: Double = 3, catchUp: Double = 15) async throws -> String {
+        try Task.checkCancellation()
+        if let reason = transportProblem { throw DeviceError(message: reason) }
+        let before = updated
+        if streamOn {
             if usable(maxAge: maxAge) { return "live" }
-            if await fresh(since: now() - maxAge, timeout: wait) != nil, usable(maxAge: maxAge) {
-                return "live (waited)"
+            if try await waitForUsable(maxAge: maxAge, timeout: wait) { return "live (waited)" }
+            // The initial IDR/GOP can take >3s over BLE. Replaying it again adds backlog.
+            if updated > before {
+                DebugLog.write("frame: live delivery progressing; waiting for tail; \(diagnosticState)")
+                if try await waitForUsable(maxAge: Self.maxFrameAge, timeout: catchUp) {
+                    return "live (caught up)"
+                }
+                throw DeviceError(message: unavailableReason ?? "视频传输积压，尚未追上实时画面")
             }
         }
         // A second request cannot cancel a timed-out first transfer on older firmware; it only
         // adds another whole GOP to the backlog. Fail clearly instead of automatically doubling it.
         try await snap()
-        return "snap"
+        if live { return "snap" }
+        DebugLog.write("frame: decoded snap is not ready; waiting for live tail; \(diagnosticState)")
+        if try await waitForUsable(maxAge: Self.maxFrameAge, timeout: catchUp) {
+            return "snap (caught up)"
+        }
+        throw DeviceError(message: unavailableReason ?? "截图已解码，但尚未收到实时画面")
+    }
+
+    private func waitForUsable(maxAge: Double, timeout: Double) async throws -> Bool {
+        let deadline = now() + max(0, timeout)
+        while true {
+            try Task.checkCancellation()
+            if let reason = transportProblem { throw DeviceError(message: reason) }
+            if usable(maxAge: maxAge) { return true }
+            if now() >= deadline { return false }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
     }
 
     /// Ask the board for the current GOP and wait until it is decoded. Returns the latency in ms.
@@ -187,7 +240,7 @@ extension ScreenSource {
             throw DeviceError(message: "截图传输完成，但没有解码出新的画面；请重新开启屏幕镜像")
         }
         let ms = (now() - started) * 1000
-        DebugLog.write(String(format: "frame: snap decoded; capture age %.2fs, transfer %.0fms", now() - capturedAt, ms))
+        DebugLog.write(String(format: "frame: snap decoded; capture age %.2fs, transfer %.0fms", frameAge, ms))
         metrics?.snapLatency(ms)
         return ms
     }

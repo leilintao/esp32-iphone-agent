@@ -89,16 +89,20 @@ extension AppModel {
                 mark(changed ? "screen changed and settled" : "no screen change seen in 3 s; settled")
             }
             try checkStart()
+            mark("video before first frame: \(feed.diagnosticState)")
             mark("first frame: " + (try await feed.currentFrame()))
+            mark("video after first frame: \(feed.diagnosticState)")
             try checkStart()
             try agent.start(task, traceStarted: true)
             mark("agent started")
             say("started: \(task)")
             began(task, early: true)
         } catch {
+            mark("video at startup failure: \(feed.diagnosticState)")
             say("cannot start: \(error.localizedDescription)")
             traces.write(feed.frame, kind: "step", ["action": .str("error"),
-                                                    "reason": .str("cannot start: \(error.localizedDescription)")])
+                                                    "reason": .str("cannot start: \(error.localizedDescription)"),
+                                                    "video_health": .str(feed.diagnosticState)])
             videoSink = nil
             saveVideoFrame(feed.frame)
             videoDir = nil

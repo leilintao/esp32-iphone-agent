@@ -3,6 +3,143 @@ import XCTest
 
 /// `video` chunk reassembly (docs/ble-protocol.md).
 final class VideoTests: XCTestCase {
+    private func decoded(ms: UInt32, snap: Bool) -> H264Decoder.Frame {
+        H264Decoder.Frame(jpeg: Data([0xff, 0xd8]), width: 480, height: 1040, decodeMs: 1,
+                          unit: AccessUnit(data: Data(), idr: true, config: false, snap: snap, boardMs: ms))
+    }
+
+    @MainActor func testLogged1358SecondOldSnapIsNotReportedAsReady() async {
+        let decoder = H264Decoder()
+        let feed = VideoFeed(decoder: decoder, clock: { 100 })
+        let device = FakeDevice()
+        feed.device = device
+        feed.mirroring = true
+        feed.boardClock(ms: 30_000) // offset 70s; board 16420ms = local 86.42s
+        device.onSend = { command in
+            if command == "snap" { decoder.onFrame?(self.decoded(ms: 16_420, snap: true)) }
+        }
+        do {
+            // Even an overly permissive caller cannot override the shared 10s safety limit.
+            try await feed.currentFrame(maxAge: 60, wait: 0, catchUp: 0.06)
+            XCTFail("the logged failure must now be rejected inside currentFrame, not later by start")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("画面延迟"))
+            XCTAssertFalse(error.localizedDescription.contains("开启屏幕镜像并选择"))
+        }
+        XCTAssertEqual(feed.frameAge, 13.58, accuracy: 0.001)
+        XCTAssertFalse(feed.live)
+        XCTAssertEqual(device.sent, ["snap"])
+    }
+
+    @MainActor func testSlowSnapWaitsForFreshTailBeforeReturning() async throws {
+        let decoder = H264Decoder()
+        let feed = VideoFeed(decoder: decoder, clock: { 100 })
+        let device = FakeDevice()
+        feed.device = device
+        feed.mirroring = true
+        feed.boardClock(ms: 30_000)
+        try await feed.stream(true)
+        var tail: Task<Void, Never>?
+        defer { tail?.cancel() }
+        device.onSend = { command in
+            guard command == "snap" else { return }
+            decoder.onFrame?(self.decoded(ms: 16_420, snap: true))
+            tail = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 120_000_000)
+                guard !Task.isCancelled else { return }
+                XCTAssertFalse(feed.live, "a newly received but old SNAP must not become live")
+                decoder.onFrame?(self.decoded(ms: 30_000, snap: false))
+            }
+        }
+        let source = try await feed.currentFrame(wait: 0, catchUp: 1)
+        XCTAssertEqual(source, "snap (caught up)")
+        XCTAssertTrue(feed.live, "every successful frame return must also pass AgentLoop.start's check")
+        XCTAssertEqual(device.sent.filter { $0 == "snap" }.count, 1)
+    }
+
+    @MainActor func testProgressingLiveGOPCatchesUpWithoutDuplicateSnapshot() async throws {
+        let decoder = H264Decoder()
+        let feed = VideoFeed(decoder: decoder, clock: { 100 })
+        let device = FakeDevice()
+        feed.device = device
+        feed.mirroring = true
+        feed.boardClock(ms: 30_000)
+        try await feed.stream(true)
+        let tail = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 20_000_000)
+            guard !Task.isCancelled else { return }
+            decoder.onFrame?(self.decoded(ms: 16_420, snap: false))
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard !Task.isCancelled else { return }
+            decoder.onFrame?(self.decoded(ms: 30_000, snap: false))
+        }
+        defer { tail.cancel() }
+        let source = try await feed.currentFrame(wait: 0.1, catchUp: 1)
+        XCTAssertEqual(source, "live (caught up)")
+        XCTAssertTrue(feed.live)
+        XCTAssertFalse(device.sent.contains("snap"))
+    }
+
+    @MainActor func testFreshnessBoundaryIsSharedAndDoesNotUseReceiveTime() {
+        var time = 100.0
+        let feed = VideoFeed(clock: { time })
+        let device = FakeDevice()
+        feed.device = device
+        feed.mirroring = true
+        feed.show(Data([0xff, 0xd8]), width: 480, height: 1040)
+        time = 109.99
+        XCTAssertTrue(feed.live)
+        time = 110
+        XCTAssertFalse(feed.live)
+        XCTAssertTrue(feed.unavailableReason?.contains("画面延迟") == true)
+    }
+
+    @MainActor func testCancellationInterruptsStaleSnapCatchUp() async {
+        let decoder = H264Decoder()
+        let feed = VideoFeed(decoder: decoder, clock: { 100 })
+        let device = FakeDevice()
+        feed.device = device
+        feed.mirroring = true
+        feed.boardClock(ms: 30_000)
+        device.onSend = { command in
+            if command == "snap" { decoder.onFrame?(self.decoded(ms: 16_420, snap: true)) }
+        }
+        let request = Task { try await feed.currentFrame(wait: 0, catchUp: 15) }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        request.cancel()
+        do {
+            _ = try await request.value
+            XCTFail("cancelled startup must not continue waiting or start the agent")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+    }
+
+    @MainActor func testTransportFailuresAreNotMisreportedAsFrameDelay() async throws {
+        let feed = VideoFeed()
+        let device = FakeDevice()
+        feed.device = device
+        feed.mirroring = true
+        feed.show(Data([0xff, 0xd8]), width: 480, height: 1040)
+        device.connected = false
+        XCTAssertTrue(feed.unavailableReason?.contains("蓝牙") == true)
+        device.connected = true
+        feed.mirroring = false
+        XCTAssertTrue(feed.unavailableReason?.contains("屏幕镜像尚未连接") == true)
+        feed.mirroring = true
+        let metrics = Metrics()
+        metrics.status(try XCTUnwrap(BoardStatus.decode(Data(#"{"vwait":1,"vover":2}"#.utf8))))
+        feed.metrics = metrics
+        do {
+            try await feed.currentFrame(wait: 0, catchUp: 0)
+            XCTFail("a fresh frame must not bypass waiting-keyframe state")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("关键帧"))
+        }
+        XCTAssertFalse(feed.live)
+        XCTAssertTrue(device.sent.isEmpty)
+    }
+
     @MainActor func testReconnectAndLinkLossDoNotExposeAnOldFrameAsLive() {
         let feed = VideoFeed()
         let device = FakeDevice()

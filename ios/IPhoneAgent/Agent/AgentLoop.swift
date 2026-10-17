@@ -75,7 +75,9 @@ extension Pointer: Gestures {}
     /// traceStarted: the caller already opened the run's trace folder (so a failed start is logged too).
     func start(_ task: String, traceStarted: Bool = false) throws {
         if running { throw DeviceError(message: "agent already running") }
-        guard screen?.live == true else { throw DeviceError(message: "no phone screen: start Screen Mirroring first") }
+        guard screen?.live == true else {
+            throw DeviceError(message: screen?.unavailableReason ?? "尚未接收到手机画面")
+        }
         self.task = task; plan = ""; steps = []; shots = [:]
         pointerAt = .zero
         lastActed = 0

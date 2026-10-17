@@ -155,7 +155,12 @@ import XCTest
     var links = 1
     var connected = true
     var sent: [String] = []
-    func send(_ command: String) async throws -> String { sent.append(command); return "" }
+    var onSend: ((String) async throws -> Void)?
+    func send(_ command: String) async throws -> String {
+        sent.append(command)
+        try await onSend?(command)
+        return ""
+    }
     func waitConnected(_ timeout: TimeInterval) async -> Bool { connected }
 }
 

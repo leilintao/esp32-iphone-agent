@@ -39,3 +39,28 @@ video-health merge, reconnect and snapshot-ACK regression tests in the normal
 iOS unit-test suite. The GitHub IPA workflow runs that suite on an available
 iPhone simulator before archiving. Real phone AirPlay/BLE latency and HID actions
 must still be checked after installing the new IPA and board firmware together.
+
+## Follow-up: slow snapshot accepted, then rejected at startup (1.0.1 build 2)
+
+A real-phone trace exposed an uncovered interaction: a SNAP took 13.97 seconds
+and decoded successfully, but the resulting frame was 13.58 seconds old. The
+snapshot path returned success without a freshness check; `AgentLoop.start`
+then rejected it against `VideoFeed.live`'s 10-second limit with a generic
+"start Screen Mirroring" error. AirPlay was streaming and overflow was zero.
+
+`VideoFeed.currentFrame` now returns only when the same readiness rule as
+`VideoFeed.live` is satisfied (connected, mirroring, decoded/unbroken, not
+waiting for IDR, capture age strictly below 10 seconds). Initial live delivery
+which advances while waiting gets up to 15 additional seconds to catch up,
+without requesting another complete GOP. A decoded but stale SNAP similarly
+waits up to 15 seconds for the live tail, then fails explicitly with frame age.
+It never refreshes a capture timestamp just because an old frame was received.
+Direct `snap()` remains a low-level transfer/decode diagnostic, not a freshness
+guarantee. Non-streaming snapshots that remain stale fail the same safety rule.
+
+The startup log and failure trace include connected/mirroring/stream/frame/
+broken/age/waitIDR/overflow values. No board firmware change is required.
+Regression tests reproduce the 13.58-second-old SNAP, a fresh tail arriving
+later, live catch-up without a duplicate SNAP, the 10-second boundary, task
+cancellation, and connection/keyframe failure messages. An injected decoder
+output and clock avoid waiting 14 real seconds or requiring physical hardware.

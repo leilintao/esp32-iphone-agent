@@ -28,6 +28,8 @@ targets:
       path: IPhoneAgent/Info.plist
       properties:
         CFBundleDisplayName: ESP32 Agent
+        CFBundleShortVersionString: "1.0.1"
+        CFBundleVersion: "2"
         CFBundleDevelopmentRegion: en
         CFBundleLocalizations: [en, zh-Hans]
         UILaunchScreen:
@@ -73,8 +75,8 @@ targets:
         CFBundleDisplayName: ESP32 Agent
         CFBundleDevelopmentRegion: en
         CFBundleLocalizations: [en, zh-Hans]
-        CFBundleShortVersionString: "1.0"
-        CFBundleVersion: "1"
+        CFBundleShortVersionString: "1.0.1"
+        CFBundleVersion: "2"
         IAAppGroup: group.$(IA_BUNDLE_ID)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
