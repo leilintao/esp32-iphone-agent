@@ -14,15 +14,23 @@ extension AutoCalibrator {
 
     func touchCalibrate(full: Bool) async throws -> TouchResult {
         let probe = app.probe, device = app.board.commands, pointer = app.pointer
-        var total = full ? Self.roughStops.count + Self.targets.count + 1 : 1
+        var total = (full ? Self.roughStops.count + Self.targets.count : 0) + CalibrationValidation.checkCount
         var clicks = 0, hits = 0
         phase = .homing
         try await pointer.reset()
 
         /// Home, move by (ux, uy), click and wait for the tap. Every probe starts from home, like the agent's moves.
         func click(_ ux: Int, _ uy: Int) async throws -> CGPoint? {
+            try Task.checkCancellation()
+            guard DeviceScreen.foreground, boardReady, mirroring, probe.capturing else {
+                throw DeviceError(message: "Calibration interrupted: touch capture or device connection lost.")
+            }
             try await device.send("home")
             try await device.send("move \(ux) \(uy)")
+            try Task.checkCancellation()
+            guard DeviceScreen.foreground, boardReady, mirroring, probe.capturing else {
+                throw DeviceError(message: "Calibration interrupted before click.")
+            }
             let sent = now()
             try await device.send("click")
             let p = await probe.tap(since: sent, timeout: Self.tapTimeout)
@@ -53,20 +61,44 @@ extension AutoCalibrator {
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
 
-        if !full {  // quick check after a reconnect: one tap at the check point
+        func validate() async throws -> TouchResult {
             phase = .verifying
-            guard pointer.calibrated else { return .failed("not calibrated") }
-            try await pointer.point(Self.check.x, Self.check.y)
-            let sent = now()
-            try await device.send("click")
-            guard let p = await probe.tap(since: sent, timeout: Self.tapTimeout) else { return .noTaps }
-            let error = max(abs(p.x - Self.check.x), abs(p.y - Self.check.y))
-            app.say(String(format: "probe check: ±%.1f%%", error * 100))
-            if error <= Self.tolerance {
-                pointer.setQuality(error)
-                return .done(error)
+            var validation = CalibrationValidation()
+            for fromHome in [true, false] {
+                let targets = fromHome ? CalibrationValidation.targets : Array(CalibrationValidation.targets.reversed())
+                for target in targets {
+                    try Task.checkCancellation()
+                    guard DeviceScreen.foreground, boardReady, mirroring, probe.capturing else {
+                        return .failed("Calibration interrupted: foreground, USB, mirroring or touch capture lost.")
+                    }
+                    if fromHome { try await pointer.reset() }
+                    try await pointer.point(target.x, target.y)
+                    try Task.checkCancellation()
+                    guard DeviceScreen.foreground, boardReady, mirroring, probe.capturing else {
+                        return .failed("Calibration interrupted before verification click.")
+                    }
+                    let sent = now()
+                    try await device.send("click")
+                    let actual = await probe.tap(since: sent, timeout: Self.tapTimeout)
+                    try Task.checkCancellation()
+                    clicks += 1
+                    progress = Progress(done: clicks, total: total)
+                    if let actual {
+                        app.say(String(format: "probe check %@ at (%.3f, %.3f): landed (%.3f, %.3f)",
+                                       fromHome ? "home" : "relative", target.x, target.y, actual.x, actual.y))
+                    }
+                    guard validation.record(target: target, actual: actual) else {
+                        return .failed(validation.problem ?? "Calibration check failed.")
+                    }
+                }
             }
-            return try await touchCalibrate(full: true)
+            guard validation.accepted else { return .failed("Calibration checks incomplete.") }
+            return .done(validation.worstError)
+        }
+
+        if !full {
+            guard pointer.calibrated else { return .failed("not calibrated") }
+            return try await validate()
         }
 
         var samples: [(ux: Double, uy: Double, fx: Double, fy: Double)] = []
@@ -113,21 +145,13 @@ extension AutoCalibrator {
         app.say(String(format: "probe fit: x = %.5f·u %+.3f, y = %.5f·u %+.3f, residual %.2f%% / %.2f%% (%@)",
                        lx.a, lx.b, ly.a, ly.b, lx.rms * 100, ly.rms * 100,
                        "\(Int(DeviceScreen.size.width))×\(Int(DeviceScreen.size.height)) pt @\(Int(DeviceScreen.scale))x"))
+        guard lx.rms.isFinite, ly.rms.isFinite, max(lx.rms, ly.rms) <= Self.tolerance else {
+            return .failed("Probe fit residual exceeds tolerance; one check point cannot validate this mapping.")
+        }
         pointer.applyProbe(x: lx, y: ly, samples: samples)
 
         // stage 3: check with the agent's own move
-        phase = .verifying
-        try await pointer.point(Self.check.x, Self.check.y)
-        let sent = now()
-        try await device.send("click")
-        clicks += 1
-        progress = Progress(done: clicks, total: total)
-        guard let p = await probe.tap(since: sent, timeout: Self.tapTimeout) else { return .done(max(lx.rms, ly.rms)) }
-        let error = max(abs(p.x - Self.check.x), abs(p.y - Self.check.y))
-        pointer.setQuality(error)
-        app.say(String(format: "probe check at (%.2f, %.2f): landed (%.3f, %.3f), ±%.1f%%", Self.check.x, Self.check.y,
-                       p.x, p.y, error * 100))
-        return .done(error)
+        return try await validate()
     }
 }
 

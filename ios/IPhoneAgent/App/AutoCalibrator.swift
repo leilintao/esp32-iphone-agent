@@ -26,7 +26,7 @@ import UIKit
 
     struct Progress: Equatable { var done: Int, total: Int }
 
-    static let tolerance = 0.015  // fraction of the screen; a bigger miss calibrates again
+    static let tolerance = CalibrationValidation.tolerance
 
     @Published var phase = Phase.idle
     @Published var reason = ""  // why the last run started
@@ -53,7 +53,7 @@ import UIKit
     /// Calibration is due: never done, the screen shape changed, or the learned correction drifted.
     var needed: Bool {
         let p = app.pointer
-        guard p.calibrated else { return true }
+        guard p.verified else { return true }
         if let aspect = p.aspect, abs(aspect - DeviceScreen.aspect) > 0.02 { return true }
         return p.drift > Self.tolerance
     }
@@ -69,21 +69,38 @@ import UIKit
 
     /// Before a run: calibrate if needed and wait for it. True when the pointer is calibrated.
     func ensureCalibrated() async -> Bool {
-        while busy { try? await Task.sleep(nanoseconds: 200_000_000) }
-        if !app.pointer.calibrated && boardReady { await run(why: String(localized: "before a run")) }
-        return app.pointer.calibrated
+        while busy {
+            do { try await Task.sleep(nanoseconds: 200_000_000) } catch { return false }
+        }
+        guard !Task.isCancelled, boardReady else { return false }
+        if needed {
+            guard DeviceScreen.foreground, mirroring else {
+                app.say("calibration: open ESP32 Agent in the foreground with Screen Mirroring on to verify the pointer")
+                return false
+            }
+            await run(why: String(localized: "before a run"))
+        }
+        return !Task.isCancelled && boardReady && !needed && phase != .failed
     }
 
     /// One automatic calibration, on the board when the app is in front.
     func run(why: String) async {
+        guard !busy else { return }
+        if !MockMode.on {
+            guard DeviceScreen.foreground, boardReady, mirroring else {
+                return failed("Calibration needs this app in the foreground, USB connected and Screen Mirroring on.")
+            }
+            app.pointer.invalidateVerification()
+        }
         reason = why
+        phase = .homing
         problem = nil
         progress = nil
         toast = false
         if DeviceScreen.foreground { openBoard() }
         let job = Task { await runOnce() }
         current = job
-        await job.value
+        await withTaskCancellationHandler { await job.value } onCancel: { job.cancel() }
         current = nil
     }
 
@@ -102,7 +119,7 @@ import UIKit
         current?.cancel()
         if busy || phase == .needsTap { app.say("calibration: cancelled") }
         progress = nil
-        phase = app.pointer.calibrated ? .done : .idle
+        phase = app.pointer.verified ? .done : .idle
         closeBoard()
         Task { _ = try? await app.pointer.reset() }
     }
@@ -116,11 +133,11 @@ import UIKit
                 switch try await touchCalibrate(full: true) {
                 case .done(let error): return finished(error)
                 case .noTaps: noTaps = true
-                case .failed(let why): app.say("calibration: touch probe failed: \(why)")
+                case .failed(let why): return failed(why)
                 }
             } catch {
                 if Task.isCancelled { return }
-                app.say("calibration: touch probe: \(error.localizedDescription)")
+                return failed("calibration: touch probe: \(error.localizedDescription)")
             }
         }
         if Task.isCancelled { return }
@@ -145,10 +162,30 @@ import UIKit
             if Task.isCancelled { return }
             guard ok else { return failed(diagnosis ?? String(localized: "Pointer not found on screen.")) }
             phase = .verifying
-            guard let error = try await app.pointer.verify() else {
-                return failed(diagnosis ?? String(localized: "Check point not found."))
+            var worst = 0.0
+            for target in CalibrationValidation.targets {
+                try Task.checkCancellation()
+                guard DeviceScreen.foreground, boardReady, mirroring else {
+                    return failed("Calibration interrupted: foreground, USB or mirroring lost.")
+                }
+                try await app.pointer.reset()
+                guard let error = try await app.pointer.verify(x: target.x, y: target.y),
+                      error.isFinite, error <= Self.tolerance else {
+                    return failed(diagnosis ?? "Pointer check failed at an independent screen position.")
+                }
+                worst = max(worst, error)
             }
-            finished(error)
+            // Also check the relative-move path, not only movements from home.
+            for target in CalibrationValidation.targets.reversed() {
+                try Task.checkCancellation()
+                guard DeviceScreen.foreground, boardReady, mirroring,
+                      let error = try await app.pointer.verify(x: target.x, y: target.y),
+                      error.isFinite, error <= Self.tolerance else {
+                    return failed("Relative-move pointer check failed.")
+                }
+                worst = max(worst, error)
+            }
+            finished(worst)
         } catch {
             if !Task.isCancelled { failed(diagnosis ?? error.localizedDescription) }
         }
@@ -159,6 +196,11 @@ import UIKit
     }
 
     func finished(_ error: Double) {
+        guard !Task.isCancelled else { return }
+        guard error.isFinite, error >= 0, error <= Self.tolerance else {
+            return failed("Calibration error exceeds the allowed tolerance.")
+        }
+        app.pointer.acceptVerification(error)
         link = app.board.commands.links
         progress = nil
         problem = nil
@@ -176,6 +218,7 @@ import UIKit
 
     /// The board stays up with the problem, Try Again and "Tap the pointer yourself".
     private func failed(_ why: String) {
+        app.pointer.invalidateVerification()
         progress = nil
         problem = why
         phase = .failed
@@ -202,7 +245,16 @@ import UIKit
                 if let p = await app.probe.tap(since: since, timeout: 1) {
                     app.say(String(format: "calibration: tapped the pointer at (%.3f, %.3f)", p.x, p.y))
                     app.pointer.finishCalibration(x: p.x, y: p.y)
-                    return finished(app.pointer.quality ?? 0.01)
+                    do {
+                        switch try await touchCalibrate(full: false) {
+                        case .done(let error): finished(error)
+                        case .noTaps: failed(Self.noTapsText)
+                        case .failed(let why): failed(why)
+                        }
+                    } catch {
+                        if !Task.isCancelled { failed(error.localizedDescription) }
+                    }
+                    return
                 }
             }
         }

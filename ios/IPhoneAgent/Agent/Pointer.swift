@@ -16,7 +16,11 @@ import Foundation
     static let maxMiss = 0.06               // bigger misses are still corrected, but not learned from
 
     struct Span: Codable, Equatable { var w: Int, h: Int }
-    private struct Saved: Codable { var w: Int, h: Int, seen: [String: [[Double]]]?, quality: Double?, aspect: Double? }
+    private struct Saved: Codable {
+        var w: Int, h: Int, seen: [String: [[Double]]]?, quality: Double?, aspect: Double?
+        var reference: [String: [[Double]]]?
+        var verificationVersion: Int?
+    }
 
     let device: HIDDevice
     weak var screen: ScreenSource?
@@ -28,6 +32,8 @@ import Foundation
     /// where the pointer really landed (seen on screen) for the fraction we aimed at, per axis; a line fit
     /// through them corrects every later move, so taps get better as the agent works
     private(set) var seen: [String: [(Double, Double)]] = ["x": [], "y": []]
+    private var reference: [String: [(Double, Double)]] = ["x": [], "y": []]
+    private var verificationVersion = 0
     @Published private(set) var quality: Double?  // pointer error at the last check, fraction of the screen
     private(set) var aspect: Double?  // frame width / height when calibrated
     var log: (String) -> Void = { print($0) }
@@ -46,11 +52,34 @@ import Foundation
             (quality, aspect) = (saved.quality, saved.aspect)
             for axis in ["x", "y"] {
                 seen[axis] = (saved.seen?[axis] ?? []).filter { $0.count == 2 }.map { ($0[0], $0[1]) }.suffix(12)
+                reference[axis] = (saved.reference?[axis] ?? saved.seen?[axis] ?? []).filter { $0.count == 2 }.map { ($0[0], $0[1]) }.suffix(12)
             }
+            verificationVersion = saved.verificationVersion ?? 0
         }
     }
 
     var calibrated: Bool { span != nil }
+
+    var verified: Bool {
+        calibrated && verificationVersion == CalibrationValidation.version
+            && quality.map { $0.isFinite && $0 >= 0 && $0 <= CalibrationValidation.tolerance } == true
+    }
+
+    /// Retain the candidate mapping, but never let a cancelled/failed calibration authorize a run.
+    func invalidateVerification() {
+        verificationVersion = 0
+        save()
+    }
+
+    func acceptVerification(_ error: Double) {
+        guard error.isFinite, error >= 0, error <= CalibrationValidation.tolerance else {
+            invalidateVerification()
+            return
+        }
+        quality = error
+        verificationVersion = CalibrationValidation.version
+        save()
+    }
 
     private func remember(_ axis: String, _ sample: (Double, Double)) {
         seen[axis] = Array((seen[axis, default: []] + [sample]).suffix(12))  // deque(maxlen=12)
@@ -60,6 +89,7 @@ import Foundation
     /// Returns true when it calibrated itself; otherwise the user taps the pointer (finishCalibration).
     /// `progress` gets 0 (homing), then 1, 2 (each probe).
     func startCalibration(progress: ((Int) -> Void)? = nil) async throws -> Bool {
+        invalidateVerification()
         pos = nil
         progress?(0)
         try await device.send("home")
@@ -88,6 +118,7 @@ import Foundation
             remember("x", (Double(units) / Double(s.w), x))
             remember("y", (Double(units) / Double(s.h), y))
         }
+        reference = seen
         save()
         log("calibration: span \(s.w) x \(s.h)")
         return true
@@ -116,15 +147,18 @@ import Foundation
 
     /// x, y: where the pointer ended up after startCalibration() (one point, picked by the user).
     func finishCalibration(x: Double, y: Double) {
+        invalidateVerification()
         (quality, aspect) = (nil, screenAspect())
         span = Span(w: Int((Double(Self.calibrationMove) / x).rounded(.toNearestOrEven)), h: Int((Double(Self.calibrationMove) / y).rounded(.toNearestOrEven)))
         seen = ["x": [], "y": []]
+        reference = seen
         save()
     }
 
     /// Touch-probe result: per-axis lines landed = a * units + b fitted from taps the app caught itself.
     /// The span is 1/a; every probe becomes a landing sample, so `fix` also corrects the offset b.
     func applyProbe(x: ProbeFit.Line, y: ProbeFit.Line, samples: [(ux: Double, uy: Double, fx: Double, fy: Double)]) {
+        invalidateVerification()
         let s = Span(w: Int((1 / x.a).rounded()), h: Int((1 / y.a).rounded()))
         span = s
         (quality, aspect) = (max(x.rms, y.rms), screenAspect())
@@ -133,6 +167,7 @@ import Foundation
             remember("x", (p.ux / Double(s.w), p.fx))
             remember("y", (p.uy / Double(s.h), p.fy))
         }
+        reference = seen
         pos = nil
         save()
         log(String(format: "calibration: touch probe span %d x %d, offset %.3f / %.3f, residual %.2f%%",
@@ -149,7 +184,8 @@ import Foundation
     private func save() {
         guard let span else { return }
         let saved = Saved(w: span.w, h: span.h, seen: seen.mapValues { $0.map { [$0.0, $0.1] } }, quality: quality,
-                          aspect: aspect)
+                          aspect: aspect, reference: reference.mapValues { $0.map { [$0.0, $0.1] } },
+                          verificationVersion: verificationVersion)
         try? JSONEncoder().encode(saved).write(to: file)
     }
 
@@ -213,7 +249,9 @@ import Foundation
 
     /// How far the learned correction has moved targets away from the plain calibration (fraction of the screen).
     var drift: Double {
-        [0.2, 0.8].flatMap { t in ["x", "y"].map { abs(fix(t, $0) - t) } }.max() ?? 0
+        [0.2, 0.8].flatMap { t in ["x", "y"].map { axis in
+            abs(fix(t, axis) - correction(t, points: reference[axis] ?? []))
+        } }.max() ?? 0
     }
 
     /// Demo data: pretend a calibration with this quality.
@@ -224,7 +262,10 @@ import Foundation
 
     /// The fraction to aim at so the pointer lands on t, from the line through the observed landings.
     func fix(_ t: Double, _ axis: String) -> Double {
-        let pts = seen[axis] ?? []
+        correction(t, points: seen[axis] ?? [])
+    }
+
+    private func correction(_ t: Double, points pts: [(Double, Double)]) -> Double {
         guard pts.count >= 2 else { return t }
         let n = Double(pts.count)
         let mc = pts.map(\.0).reduce(0, +) / n, mf = pts.map(\.1).reduce(0, +) / n
