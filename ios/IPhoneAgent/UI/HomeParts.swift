@@ -25,6 +25,29 @@ struct DepartureOverlay: View {
     }
 }
 
+/// The board's GOP cache is close to full: restarting mirroring now is cheap; after it
+/// overflows, a fresh keyframe (another mirroring restart) is the only way back.
+struct VideoCacheWarningPanel: View {
+    let status: BoardStatus?
+
+    var body: some View {
+        let pct = Int(((status?.gopUsage ?? 0) * 100).rounded())
+        Section {
+            Label {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Video cache \(pct)% full")
+                    Text("Restart Screen Mirroring before the next task. If it fills, new snapshots wait for a keyframe.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } icon: {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Palette.warning)
+            }
+        } header: {
+            Text("Video cache")
+        }
+    }
+}
+
 /// "Needs your help": why, and Take over / Continue / Skip / Stop (the same as the Live Activity).
 struct HelpPanel: View {
     @ObservedObject var app: AppModel

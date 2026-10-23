@@ -107,7 +107,9 @@ extension ScreenSource {
     private var transportProblem: String? {
         if device?.connected != true { return "开发板蓝牙未连接，请先连接开发板" }
         if !mirroring { return "屏幕镜像尚未连接，请开启屏幕镜像并选择 ESP32 Agent" }
-        if metrics?.board?.vwait == 1 {
+        // vwait means the cache lost its IDR anchor. A warm decoder may still be receiving a
+        // continuous, decodable tail (vcont); only a stalled one needs a keyframe.
+        if metrics?.board?.vwait == 1 && metrics?.board?.vcont != 1 {
             return "视频正在等待关键帧（缓存溢出次数：\(metrics?.board?.vover ?? 0)），请停止并重新开启屏幕镜像"
         }
         return nil
@@ -116,10 +118,11 @@ extension ScreenSource {
     var frameAge: Double { capturedAt > 0 ? max(0, clock() - capturedAt) : .infinity }
 
     var diagnosticState: String {
-        String(format: "connected=%@ mirroring=%@ stream=%@ frame=%@ broken=%@ age=%.2fs waitIDR=%d overflow=%d pending=%d quietTail=%@",
+        String(format: "connected=%@ mirroring=%@ stream=%@ frame=%@ broken=%@ age=%.2fs waitIDR=%d liveTail=%d overflow=%d pending=%d gop=%d/%d quietTail=%@",
                String(device?.connected ?? false), String(mirroring), String(streamOn), String(frame != nil),
-               String(broken), frameAge, metrics?.board?.vwait ?? -1, metrics?.board?.vover ?? -1,
-               metrics?.board?.vpending ?? -1, String(verifiedQuietTail))
+               String(broken), frameAge, metrics?.board?.vwait ?? -1, metrics?.board?.vcont ?? -1,
+               metrics?.board?.vover ?? -1, metrics?.board?.vpending ?? -1,
+               metrics?.board?.gop ?? -1, metrics?.board?.gopcap ?? -1, String(verifiedQuietTail))
     }
 
     // AirPlay may send NO frames on an unchanged screen. Only a recent board watermark
@@ -127,7 +130,7 @@ extension ScreenSource {
     // validate an old still. Never replace capture time with receive time.
     private var verifiedQuietTail: Bool {
         guard let metrics, metrics.hasRecentStatus, let s = metrics.board,
-              s.ap == "streaming", s.vwait == 0, s.vpending == 0,
+              s.ap == "streaming", s.vwait == 0 || s.vcont == 1, s.vpending == 0,
               let up = s.up, let age = s.vage, age >= 0, age < Int(UInt32.max),
               let frameBoardMs else { return false }
         let latest = UInt32(truncatingIfNeeded: up - age)

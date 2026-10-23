@@ -206,3 +206,47 @@ not just GATT acknowledgements. No model requests or HID actions were sent durin
 these checks. Automatic model-frame delivery and interrupted/background reconnect
 have not yet been re-tested on this version. The previously reported pointer miss
 (target 1, observed near the left of 4) and 5535 calculation remain unresolved.
+
+### Touch calibration refresh and power interruption (2026-10-18)
+
+With user-confirmed foreground permission, `app calibrate` completed all touch
+probes. The new fit was x=0.00191*u+0.044, y=0.00083*u+0.031, residual
+0.50%/0.62%, replacing the stored 523x1368 span with 524x1204. The independent
+check aimed at (0.50,0.62) and received (0.503,0.620), reporting 0.3% error.
+This is actual touch capture, not a model's inferred pointer location.
+
+Before the post-calibration Calculator key check, the board restarted: phone
+logs showed `reset: power-on`, uptime 4 seconds, AP idle and no live frame.
+The Agent remained idle and no post-calibration digit was clicked. Root cause
+of the power-on interruption is not established; the user was asked whether
+boot audio or cable movement accompanied it and to restore screen mirroring.
+The earlier raw-HID single-point tests used span alone rather than the saved
+offset correction and therefore are not sufficient evidence of hardware failure.
+
+### Unanchored live tail and the pre-overflow warning
+
+The GOP cache is capped at 4 MiB. It used to drop the whole buffer and stop
+sending whenever an AU no longer fit, even if the phone's decoder already had
+every buffered reference frame. That turned a full *cache* into a dead *video
+link* and required a manual Screen Mirroring restart.
+
+`gop_push` now takes a `live_synced` flag: the video task reports whether its
+last completely sent AU is the newest buffered one. On an overflow with that
+flag the buffer restarts at the incoming AU (the next frame the decoder needs),
+keeps `wait_idr` set because there is no IDR anchor, and sets `live_continue`.
+Snapshots and newly subscribing decoders still require an anchored GOP, but an
+already-warm decoder keeps receiving a continuous tail. If any AU was still
+unsent, or the sender has no state (new VIDEO subscription), the old fail-safe
+behaviour remains: stop and wait for the next IDR. An AU larger than the 512-KiB
+transmit scratch, or a snapshot that interrupts live delivery, also clears the
+continuation guarantee.
+
+Status exposes this as `vcont` (1 = live tail continues) and `gopcap`. The app
+no longer treats `vwait=1` alone as a transport failure: it fails only when
+`vcont` is 0, and still requires a fresh frame or an exact quiet-tail watermark.
+Diagnostics and Home warn once the cache is 75% full (`gop / gopcap`), before it
+overflows, so mirroring can be restarted at a convenient moment instead of
+mid-run. The counter is per boot and does not reset on a mirroring restart.
+
+These changes do not request IDRs from AirPlay. A stalled cache (`vwait=1`,
+`vcont=0`) still requires stopping and restarting Screen Mirroring on the phone.

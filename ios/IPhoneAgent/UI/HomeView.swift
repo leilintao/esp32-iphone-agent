@@ -29,6 +29,7 @@ struct HomeView: View {
                 }
                 if app.help != nil { HelpPanel(app: app) }
                 if let stage = app.recovering { RecoveryPanel(app: app, stage: stage) }
+                if board.status?.videoCachePressure == true { VideoCacheWarningPanel(status: board.status) }
                 if agent.running || app.runMood != nil { liveSection }
                 taskSection
                 intentSection

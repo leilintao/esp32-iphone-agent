@@ -143,6 +143,18 @@ void display_poll(const char *usb, const char *reset) {
     snprintf(footer, sizeof footer, "%luh", (unsigned long)(seconds / 3600));
   line(7, 176, 301, footer, MUTED, BG, 1, 50);
 }
+#elif defined(DIAGNOSTIC_MINIMAL_ES3C28P)
+#include <Arduino.h>
+// A/B build: physically disable the board-specific loads, not merely the UI.
+// No LCD/SPI, PWM, codec, I2S or audio task is initialized. Never touch USB 19/20.
+void display_begin() {
+  pinMode(45, OUTPUT);
+  digitalWrite(45, LOW);  // backlight is active high
+  pinMode(1, OUTPUT);
+  digitalWrite(1, HIGH);  // amplifier is active low
+}
+void display_poll(const char *, const char *) {}
+void display_command(const String &) {}
 #else
 void display_begin() {}
 void display_poll(const char *, const char *) {}

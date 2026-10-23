@@ -27,15 +27,19 @@ typedef struct {
   uint8_t cfg[GOP_CFG_MAX];  // SPS+PPS, Annex-B
   size_t cfg_len;
   uint32_t cfg_ts;
-  bool wait_idr;    // overflow or start: drop until the next IDR
-  uint32_t gen;     // bumps whenever the buffer restarts
+  bool wait_idr;       // no IDR anchor: snapshots/new decoders must wait for one
+  bool live_continue;  // cache restarted at the AU after the last sent one: a live decoder may continue
+  uint32_t gen;        // bumps whenever the buffer restarts
   uint32_t overflows;
 } gop_buf;
 
 void gop_init(gop_buf *g, uint8_t *arena, size_t cap, gop_au *aus, int max);
 void gop_set_config(gop_buf *g, const uint8_t *annexb, size_t len, uint32_t ts);
 // Appends one Annex-B access unit. Returns its index, or -1 if it was dropped.
-int gop_push(gop_buf *g, const uint8_t *annexb, size_t len, bool idr, uint32_t ts);
+// `live_synced` means every AU currently buffered was already handed to the live
+// decoder, so an overflow can restart at this AU without breaking its reference chain.
+// Without an IDR anchor only such a restarted buffer accepts P-frames.
+int gop_push(gop_buf *g, const uint8_t *annexb, size_t len, bool idr, uint32_t ts, bool live_synced);
 // True if the Annex-B data contains an IDR slice (NAL type 5).
 bool annexb_has_idr(const uint8_t *p, size_t len);
 // Rewrites AVCC (4-byte big-endian length prefixes) in place into Annex-B start codes.

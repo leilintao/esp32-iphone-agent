@@ -102,9 +102,9 @@ static void logConn(const char *what, NimBLEConnInfo &ci) {
           ci.isEncrypted() ? (ci.isBonded() ? "encrypted+bonded" : "encrypted") : "plain");
 }
 
-// 15 ms interval (min = max, the fastest iOS accepts), no latency, 4 s supervision; 2M PHY; DLE 251.
+// 15 ms interval (min = max, the fastest iOS accepts), no latency, 4 s supervision; 1M PHY for Wi-Fi coexistence; DLE 251.
 static void tuneLink(uint16_t h) {
-  server->updatePhy(h, BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_CODED_ANY);
+  server->updatePhy(h, BLE_GAP_LE_PHY_1M_MASK, BLE_GAP_LE_PHY_1M_MASK, BLE_GAP_LE_PHY_CODED_ANY);
   server->setDataLen(h, 251);
   server->updateConnParams(h, 12, 12, 0, 400);
 }
@@ -261,7 +261,7 @@ void ble_begin(const String &name) {
   NimBLEDevice::init(name.c_str());
   NimBLEDevice::setMTU(517);
   NimBLEDevice::setPower(0);  // dBm; the phone is centimetres away (and less current, see netcfg.cpp)
-  NimBLEDevice::setDefaultPhy(BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_2M_MASK);
+  NimBLEDevice::setDefaultPhy(BLE_GAP_LE_PHY_1M_MASK, BLE_GAP_LE_PHY_1M_MASK);
   NimBLEDevice::setSecurityAuth(true, false, true);  // bonding, Just Works, LE Secure Connections
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
   NimBLEDevice::setSecurityInitKey(BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID);

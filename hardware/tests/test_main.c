@@ -5,9 +5,65 @@
 #include "../hid_bridge/src/bplist/bplist.h"
 #include "../hid_bridge/src/video/gop.h"
 #include "../hid_bridge/src/video/pacing.h"
+#include "../hid_bridge/src/hid/motion.h"
 
 static int fails;
 #define CHECK(c) do { if (!(c)) { fails++; printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); } } while (0)
+
+static void check_motion(int32_t dx, int32_t dy) {
+  hid_motion plan = hid_motion_begin(dx, dy);
+  int sx, sy;
+  int64_t x = 0, y = 0;
+  unsigned n = 0;
+  bool seen_y = false;
+  while (hid_motion_next(&plan, &sx, &sy)) {
+    CHECK(abs(sx) <= HID_MOTION_STEP && abs(sy) <= HID_MOTION_STEP);
+    CHECK(sx || sy);
+    CHECK(!(sx && sy));  // strictly orthogonal: never mix X and Y in one HID report
+    if (sx != 0) {
+      CHECK(!seen_y);
+      CHECK(dx >= 0 ? sx > 0 : sx < 0);
+      if (x + sx != dx) CHECK(abs(sx) == HID_MOTION_STEP);
+    } else {
+      seen_y = true;
+      CHECK(dy >= 0 ? sy > 0 : sy < 0);
+      if (y + sy != dy) CHECK(abs(sy) == HID_MOTION_STEP);
+    }
+    x += sx; y += sy; n++;
+  }
+  CHECK(x == dx && y == dy && n == plan.count);
+  CHECK(!hid_motion_next(&plan, &sx, &sy));
+}
+
+static void check_axis_invariance(int32_t dx1, int32_t dx2, int32_t dy) {
+  hid_motion p1 = hid_motion_begin(dx1, dy);
+  hid_motion p2 = hid_motion_begin(dx2, dy);
+  int sx, sy;
+  int y_steps1[512], y_steps2[512];
+  unsigned n1 = 0, n2 = 0;
+  while (hid_motion_next(&p1, &sx, &sy)) if (sy != 0 && n1 < 512) y_steps1[n1++] = sy;
+  while (hid_motion_next(&p2, &sx, &sy)) if (sy != 0 && n2 < 512) y_steps2[n2++] = sy;
+  CHECK(n1 == n2);
+  for (unsigned i = 0; i < n1; i++) CHECK(y_steps1[i] == y_steps2[i]);
+}
+
+static void test_motion(void) {
+  const int32_t moves[][2] = {{0, 0}, {1, 0}, {0, -1}, {150, 150}, {350, 350},
+    {106, 254}, {358, 254}, {106, 803}, {358, 803}, {50, 999},
+    {-50, 999}, {50, -999}, {-50, -999}, {1200, 0}, {0, 1200},
+    {82, 1257}, {158, 1202}, {542, 1202}};
+  for (unsigned i = 0; i < sizeof(moves) / sizeof(moves[0]); i++) check_motion(moves[i][0], moves[i][1]);
+  for (int x = -70; x <= 70; x += 7)
+    for (int y = -100; y <= 100; y += 10) check_motion(x, y);
+  check_axis_invariance(106, 358, 254);
+  check_axis_invariance(106, 358, 803);
+  check_axis_invariance(158, 542, 1202);
+  check_axis_invariance(82, 542, 1257);
+  // Input limits: check first steps without iterating hundreds of millions of reports.
+  hid_motion large = hid_motion_begin(INT32_MIN, INT32_MAX);
+  int sx, sy;
+  CHECK(hid_motion_next(&large, &sx, &sy) && sx == -HID_MOTION_STEP && sy == 0);
+}
 
 static void test_bplist_roundtrip(void) {
   bp_writer w;
@@ -90,13 +146,34 @@ static void test_gop(void) {
   gop_buf g;
   gop_init(&g, arena, sizeof arena, aus, 4);
   uint8_t au[40] = {0, 0, 0, 1, 0x41};
-  CHECK(gop_push(&g, au, 10, false, 1) == -1);  // waits for the first IDR
-  CHECK(gop_push(&g, au, 30, true, 2) == 0);
-  CHECK(gop_push(&g, au, 30, false, 3) == 1);
-  CHECK(gop_push(&g, au, 30, false, 4) == 2 && g.used == 90);
-  CHECK(gop_push(&g, au, 30, false, 5) == -1 && g.n == 0 && g.wait_idr && g.overflows == 1);
-  CHECK(gop_push(&g, au, 10, false, 6) == -1);
-  CHECK(gop_push(&g, au, 10, true, 7) == 0 && !g.wait_idr);
+  CHECK(gop_push(&g, au, 10, false, 1, false) == -1);  // waits for the first IDR
+  CHECK(gop_push(&g, au, 30, true, 2, false) == 0);
+  CHECK(gop_push(&g, au, 30, false, 3, false) == 1);
+  CHECK(gop_push(&g, au, 30, false, 4, true) == 2 && g.used == 90);
+  // Not every buffered AU reached the decoder: drop the GOP and wait for an IDR.
+  CHECK(gop_push(&g, au, 30, false, 5, false) == -1 && g.n == 0 && g.wait_idr && !g.live_continue);
+  CHECK(g.overflows == 1);
+  CHECK(gop_push(&g, au, 10, false, 6, true) == -1);  // no anchor, no live chain
+  CHECK(gop_push(&g, au, 30, true, 7, false) == 0 && !g.wait_idr && !g.live_continue);
+
+  // Everything was delivered: an overflow may restart at this AU and keep the live
+  // decoder going even though the cache has no IDR.
+  gop_init(&g, arena, sizeof arena, aus, 4);
+  CHECK(gop_push(&g, au, 30, true, 10, false) == 0);
+  CHECK(gop_push(&g, au, 30, false, 11, true) == 1);
+  CHECK(gop_push(&g, au, 30, false, 12, true) == 2 && g.used == 90);
+  CHECK(gop_push(&g, au, 30, false, 13, true) == 0 && g.n == 1 && g.used == 30);
+  CHECK(g.wait_idr && g.live_continue && g.overflows == 1);
+  CHECK(gop_push(&g, au, 30, false, 14, false) == 1 && g.n == 2 && g.live_continue);
+  CHECK(gop_push(&g, au, 30, false, 15, false) == 2 && g.n == 3);
+  // The decoder lagged: this restart cannot be continued, so stop until a real IDR.
+  CHECK(gop_push(&g, au, 30, false, 16, false) == -1 && g.n == 0 && g.wait_idr && !g.live_continue);
+  CHECK(g.overflows == 2);
+  CHECK(gop_push(&g, au, 30, false, 17, true) == -1);
+  CHECK(gop_push(&g, au, 30, true, 18, false) == 0 && !g.wait_idr);
+  // An AU larger than the whole cache is unusable even with a live decoder.
+  CHECK(gop_push(&g, au, 120, false, 19, true) == -1 && g.n == 0 && g.wait_idr && !g.live_continue);
+  CHECK(g.overflows == 3);
 
   uint8_t idr[] = {0, 0, 0, 1, 0x67, 1, 0, 0, 0, 1, 0x65, 9};
   CHECK(annexb_has_idr(idr, sizeof idr));
@@ -197,6 +274,7 @@ static void test_chunk_retry(void) {
 }
 
 int main(void) {
+  test_motion();
   test_chunk_retry();
   CHECK(!video_interactive_command("123 ping"));
   CHECK(!video_interactive_command("123 log start: waiting for video"));

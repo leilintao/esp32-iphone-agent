@@ -20,10 +20,13 @@
 #include "status_display.h"
 #include "boot_voice.h"
 #include "src/airplay/airplay.h"
+#include "src/hid/motion.h"
 
-const int STEP = 10;      // max pointer delta per report while moving
-const int STEP_MS = 8;    // report interval; constant pace keeps iOS acceleration predictable
+const int STEP_MS = 8;          // report interval; constant pace keeps iOS acceleration predictable
+const int AXIS_SETTLE_MS = 40;  // pause between X and Y so iOS velocity filter resets before the second axis
 const int HOME_REPORTS = 50;
+const uint32_t USB_KEEPALIVE_MS = 10000;
+const uint32_t USB_WAKE_RETRY_MS = 2000;
 #ifndef AGENT_DEBUG_SERIAL
 #define AGENT_DEBUG_SERIAL 0  // 1: echo commands and the AirPlay handshake over USB serial
 #endif
@@ -35,13 +38,26 @@ USBHIDKeyboard keyboard;
 USBHIDConsumerControl consumer;
 const uint16_t AC_HOME = 0x0223;  // HID consumer page: AC Home
 static String receiverName = "ESP32 Agent";
+static uint32_t lastUsbActivityMs = 0;
+static uint32_t lastUsbWakeMs = 0;
+#if defined(DIAGNOSTIC_MINIMAL_ES3C28P)
+static const char *buildVariant = "es3c28p-minimal-ab";
+#elif defined(STATUS_DISPLAY_ES3C28P)
+static const char *buildVariant = "es3c28p-display-audio";
+#else
+static const char *buildVariant = "standard";
+#endif
 
 void movePaced(long dx, long dy) {
-  while (dx || dy) {
-    int sx = constrain(dx, -STEP, STEP), sy = constrain(dy, -STEP, STEP);
+  hid_motion plan = hid_motion_begin((int32_t)dx, (int32_t)dy);
+  int sx, sy, prevSx = 0;
+  while (hid_motion_next(&plan, &sx, &sy)) {
+    if (prevSx != 0 && sx == 0 && sy != 0 && !mouse.isPressed(MOUSE_LEFT)) {
+      delay(AXIS_SETTLE_MS);
+    }
     mouse.move(sx, sy);
-    dx -= sx;
-    dy -= sy;
+    lastUsbActivityMs = millis();
+    prevSx = sx;
     delay(STEP_MS);
   }
 }
@@ -72,6 +88,7 @@ bool pressCombo(String combo) {
   }
   delay(30);
   keyboard.releaseAll();
+  lastUsbActivityMs = millis();
   return true;
 }
 
@@ -80,9 +97,29 @@ bool pressCombo(String combo) {
 bool usbReady() {
   if (tud_suspended()) {
     tud_remote_wakeup();
+    lastUsbWakeMs = millis();
     for (int i = 0; i < 50 && tud_suspended(); i++) delay(10);
   }
   return tud_mounted() && !tud_suspended();
+}
+
+// Keep the iPhone USB host from entering selective suspend (~30s idle) and unmounting (~18s later)
+// while an active BLE or AirPlay session exists.
+void usbPollKeepAlive() {
+  if (!tud_mounted()) return;
+  if (!ble_connected() && airplay_state() == 0) return;
+  uint32_t now = millis();
+  if (tud_suspended()) {
+    if (now - lastUsbWakeMs >= USB_WAKE_RETRY_MS) {
+      lastUsbWakeMs = now;
+      tud_remote_wakeup();
+    }
+    return;
+  }
+  if (now - lastUsbActivityMs >= USB_KEEPALIVE_MS) {
+    mouse.move(0, 0);
+    lastUsbActivityMs = now;
+  }
 }
 
 String run(const String &line) {
@@ -93,19 +130,20 @@ String run(const String &line) {
   sscanf(arg.c_str(), "%ld %ld", &a, &b);
 
   if (cmd == "ping") return "ok";
-  if (!usbReady()) return "err phone usb asleep (unlock the phone)";
+  if (!usbReady()) return tud_mounted() ? "err phone usb asleep (unlock the phone)" : "err phone usb not mounted (replug usb cable)";
   if (cmd == "home") {  // slam the pointer into the top-left corner
     for (int i = 0; i < HOME_REPORTS; i++) { mouse.move(-127, -127); delay(2); }
+    lastUsbActivityMs = millis();
     return "ok";
   }
   if (cmd == "move") { movePaced(a, b); return "ok"; }
-  if (cmd == "press") { mouse.press(MOUSE_LEFT); return "ok"; }
-  if (cmd == "release") { mouse.release(MOUSE_LEFT); return "ok"; }
-  if (cmd == "click") { mouse.press(MOUSE_LEFT); delay(60); mouse.release(MOUSE_LEFT); return "ok"; }
-  if (cmd == "scroll") { mouse.move(0, 0, a, b); return "ok"; }
-  if (cmd == "type") { keyboard.print(arg); return "ok"; }
+  if (cmd == "press") { mouse.press(MOUSE_LEFT); lastUsbActivityMs = millis(); return "ok"; }
+  if (cmd == "release") { mouse.release(MOUSE_LEFT); lastUsbActivityMs = millis(); return "ok"; }
+  if (cmd == "click") { mouse.press(MOUSE_LEFT); delay(60); mouse.release(MOUSE_LEFT); lastUsbActivityMs = millis(); return "ok"; }
+  if (cmd == "scroll") { mouse.move(0, 0, a, b); lastUsbActivityMs = millis(); return "ok"; }
+  if (cmd == "type") { keyboard.print(arg); lastUsbActivityMs = millis(); return "ok"; }
   if (cmd == "key") return pressCombo(arg) ? "ok" : "err unknown key";
-  if (cmd == "homescreen") { consumer.press(AC_HOME); delay(40); consumer.release(); return "ok"; }
+  if (cmd == "homescreen") { consumer.press(AC_HOME); delay(40); consumer.release(); lastUsbActivityMs = millis(); return "ok"; }
   return "err unknown command";
 }
 
@@ -184,17 +222,18 @@ String board(const String &line, const String &id) {
 String statusJson(bool full) {
   static const char *apStates[] = {"idle", "connected", "streaming"};
   VideoStats v = video_stats();
-  char s[640];
+  char s[768];
   snprintf(s, sizeof s,
-           "{\"up\":%lu,\"rst\":\"%s\",\"heap\":%u,\"psram\":%u,\"usb\":\"%s\",\"net\":\"%s\",\"ip\":\"%s\",\"sta\":%d,"
-           "\"ap\":\"%s\",\"w\":%u,\"h\":%u,\"kbps\":%lu,\"fps\":%.1f,\"idr\":%lu,\"gop\":%lu,"
-           "\"vwait\":%d,\"vover\":%lu,\"vage\":%lu,\"vlarge\":%lu,"
+           "{\"up\":%lu,\"rst\":\"%s\",\"variant\":\"%s\",\"heap\":%u,\"psram\":%u,\"usb\":\"%s\",\"net\":\"%s\",\"ip\":\"%s\",\"sta\":%d,"
+           "\"ap\":\"%s\",\"w\":%u,\"h\":%u,\"kbps\":%lu,\"fps\":%.1f,\"idr\":%lu,\"gop\":%lu,\"gopcap\":%lu,"
+           "\"vwait\":%d,\"vcont\":%d,\"vover\":%lu,\"vage\":%lu,\"vlarge\":%lu,"
            "\"vtxage\":%lu,\"vpending\":%lu,"
            "\"ble\":{\"mtu\":%u,\"phy\":%u,\"kbps\":%lu,\"drop\":%lu,\"rdrop\":%lu,\"n\":%d}}",
-           millis(), resetReason(), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+           millis(), resetReason(), buildVariant, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), usbState(), net_mode(), net_ip().c_str(), net_peers(),
            apStates[airplay_state()], cfg_width(), cfg_height(), (unsigned long)v.kbps, v.fps, (unsigned long)v.idr_ms,
-           (unsigned long)v.gop_bytes, v.wait_idr, (unsigned long)v.overflows,
+           (unsigned long)v.gop_bytes, (unsigned long)v.gop_cap_bytes, v.wait_idr, v.live_continue,
+           (unsigned long)v.overflows,
            (unsigned long)v.age_ms, (unsigned long)v.oversized,
            (unsigned long)v.tx_age_ms, (unsigned long)v.pending_frames,
            ble_mtu(), ble_phy(), (unsigned long)ble_kbps(), (unsigned long)ble_drops(),
@@ -202,8 +241,8 @@ String statusJson(bool full) {
   if (full) return s;
   // MTU below ~250 (before the MTU exchange): keep only the fields the app needs to stay alive
   snprintf(s, sizeof s, "{\"up\":%lu,\"rst\":\"%s\",\"usb\":\"%s\",\"net\":\"%s\",\"ap\":\"%s\","
-           "\"vwait\":%d,\"vover\":%lu,\"vage\":%lu,\"vlarge\":%lu,\"vtxage\":%lu,\"vpending\":%lu,\"ble\":{\"mtu\":%u}}",
-           millis(), resetReason(), usbState(), net_mode(), apStates[airplay_state()], v.wait_idr,
+           "\"vwait\":%d,\"vcont\":%d,\"vover\":%lu,\"vage\":%lu,\"vlarge\":%lu,\"vtxage\":%lu,\"vpending\":%lu,\"ble\":{\"mtu\":%u}}",
+           millis(), resetReason(), usbState(), net_mode(), apStates[airplay_state()], v.wait_idr, v.live_continue,
            (unsigned long)v.overflows, (unsigned long)v.age_ms, (unsigned long)v.oversized,
            (unsigned long)v.tx_age_ms, (unsigned long)v.pending_frames, ble_mtu());
   return s;
@@ -270,6 +309,7 @@ void loop() {
   static bool linked = false;
   esp_task_wdt_reset();
   net_poll();
+  usbPollKeepAlive();
   display_poll(usbState(), resetReason());
   if (linked && !ble_connected()) {
     mouse.release(MOUSE_LEFT);  // a gesture cut off mid-way must not leave the button held (long press)

@@ -11,10 +11,11 @@ void video_snap(const String &id);               // replies "<id> ok" when the G
 void video_bench(const String &id, uint32_t kb);  // replies "<id> ok <ms>"
 
 struct VideoStats {
-  uint32_t kbps, idr_ms, gop_bytes;
+  uint32_t kbps, idr_ms, gop_bytes, gop_cap_bytes;
   float fps;
   uint32_t overflows, age_ms, oversized;
-  bool wait_idr;
+  bool wait_idr;       // no IDR anchor in the cache (snapshots need a restart)
+  bool live_continue;  // ...but an already-warm decoder keeps receiving a decodable tail
   uint32_t tx_age_ms, pending_frames;
 };
 VideoStats video_stats();

@@ -9,6 +9,7 @@ void gop_init(gop_buf *g, uint8_t *arena, size_t cap, gop_au *aus, int max) {
   g->aus = aus;
   g->max = max;
   g->wait_idr = true;
+  g->live_continue = false;
 }
 
 void gop_set_config(gop_buf *g, const uint8_t *annexb, size_t len, uint32_t ts) {
@@ -24,18 +25,30 @@ static void restart(gop_buf *g) {
   g->gen++;
 }
 
-int gop_push(gop_buf *g, const uint8_t *annexb, size_t len, bool idr, uint32_t ts) {
+int gop_push(gop_buf *g, const uint8_t *annexb, size_t len, bool idr, uint32_t ts, bool live_synced) {
   if (idr) {
     restart(g);
     g->wait_idr = false;
-  } else if (g->wait_idr) {
-    return -1;
+    g->live_continue = false;
+  } else if (g->wait_idr && !g->live_continue) {
+    return -1;  // no anchor and no in-sync decoder: nothing can use this P-frame
   }
-  if (g->used + len > g->cap || g->n == g->max) {  // GOP too big: drop it and wait for the next IDR
+  if (len > g->cap) {  // cannot fit even an empty buffer: this AU is unusable
     restart(g);
     g->wait_idr = true;
+    g->live_continue = false;
     g->overflows++;
     return -1;
+  }
+  if (g->used + len > g->cap || g->n == g->max) {  // GOP too big
+    // When every buffered AU was already sent, the decoder has the references this
+    // AU needs even though the cache loses its IDR. Restart at this AU and keep
+    // delivering live; otherwise drop the GOP and wait for the next IDR.
+    restart(g);
+    g->wait_idr = true;
+    g->live_continue = live_synced;
+    g->overflows++;
+    if (!live_synced) return -1;
   }
   memcpy(g->arena + g->used, annexb, len);
   g->aus[g->n] = (gop_au){(uint32_t)g->used, (uint32_t)len, ts, idr};

@@ -28,10 +28,21 @@ struct BoardStatus: Codable, Equatable {
     var sta: Int?
     var ap: String?    // idle | connected | streaming
     var w: Int?, h: Int?
-    var kbps: Double?, fps: Double?, idr: Int?, gop: Int?
-    var vwait: Int?, vover: Int?, vage: Int?, vlarge: Int?
+    var kbps: Double?, fps: Double?, idr: Int?, gop: Int?, gopcap: Int?
+    var vwait: Int?, vcont: Int?, vover: Int?, vage: Int?, vlarge: Int?
     var vtxage: Int?, vpending: Int?
     var ble: BLE?
+
+    static let gopCapFallback = 4 << 20
+    /// How full the board's GOP cache is (0...1), against the cap it reports.
+    var gopUsage: Double? {
+        guard let gop else { return nil }
+        return Double(max(gop, 0)) / Double(max(gopcap ?? Self.gopCapFallback, 1))
+    }
+    /// The cache is close to overflowing, but still decodable: a good moment to restart mirroring.
+    var videoCachePressure: Bool { (gopUsage ?? 0) >= 0.75 && vwait != 1 }
+    /// No IDR anchor, but an already-warm decoder keeps receiving a decodable tail.
+    var videoCacheStalled: Bool { vwait == 1 && vcont != 1 }
 
     static func decode(_ data: Data) -> BoardStatus? { try? JSONDecoder().decode(BoardStatus.self, from: data) }
 
@@ -42,8 +53,8 @@ struct BoardStatus: Codable, Equatable {
         m.up = n.up ?? up; m.rst = n.rst ?? rst; m.heap = n.heap ?? heap; m.psram = n.psram ?? psram
         m.usb = n.usb ?? usb; m.net = n.net ?? net; m.ip = n.ip ?? ip; m.sta = n.sta ?? sta; m.ap = n.ap ?? ap
         m.w = n.w ?? w; m.h = n.h ?? h; m.kbps = n.kbps ?? kbps; m.fps = n.fps ?? fps; m.idr = n.idr ?? idr
-        m.gop = n.gop ?? gop
-        m.vwait = n.vwait ?? vwait; m.vover = n.vover ?? vover
+        m.gop = n.gop ?? gop; m.gopcap = n.gopcap ?? gopcap
+        m.vwait = n.vwait ?? vwait; m.vcont = n.vcont ?? vcont; m.vover = n.vover ?? vover
         m.vage = n.vage ?? vage; m.vlarge = n.vlarge ?? vlarge
         m.vtxage = n.vtxage ?? vtxage; m.vpending = n.vpending ?? vpending
         let a = ble ?? BLE(), b = n.ble ?? BLE()

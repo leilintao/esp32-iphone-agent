@@ -167,6 +167,53 @@ final class VideoTests: XCTestCase {
         XCTAssertTrue(device.sent.isEmpty)
     }
 
+    @MainActor func testLiveTailContinuesWhileTheCacheHasNoKeyframe() {
+        let feed = VideoFeed()
+        let device = FakeDevice()
+        feed.device = device
+        feed.mirroring = true
+        feed.show(Data([0xff, 0xd8]), width: 480, height: 1040)
+        let metrics = Metrics()
+        feed.metrics = metrics
+        metrics.status(BoardStatus(ap: "streaming", vwait: 1, vcont: 1, vage: 0, vpending: 0))
+        XCTAssertTrue(feed.live, "an unanchored but continuous live tail is still live video")
+        XCTAssertNil(feed.unavailableReason)
+        metrics.status(BoardStatus(ap: "streaming", vwait: 1, vcont: 0, vage: 0, vpending: 0))
+        XCTAssertFalse(feed.live)
+        XCTAssertTrue(feed.unavailableReason?.contains("关键帧") == true)
+        XCTAssertTrue(device.sent.isEmpty)
+    }
+
+    @MainActor func testLiveTailStillValidatesAnUnchangedStill() async throws {
+        var time = 100.0
+        let decoder = H264Decoder()
+        let feed = VideoFeed(decoder: decoder, clock: { time })
+        let device = FakeDevice()
+        let metrics = Metrics()
+        feed.device = device; feed.metrics = metrics; feed.mirroring = true
+        feed.boardClock(ms: 30_000)
+        decoder.onFrame?(decoded(ms: 30_000, snap: false))
+        try await Task.sleep(nanoseconds: 20_000_000)
+        time = 120
+        XCTAssertFalse(feed.live)
+        metrics.status(BoardStatus(up: 50_000, ap: "streaming", vwait: 1, vcont: 1, vage: 20_000, vpending: 0))
+        XCTAssertTrue(feed.live, "live tail + matching watermark proves the still is current")
+        metrics.status(BoardStatus(up: 50_000, ap: "streaming", vwait: 1, vcont: 0, vage: 20_000, vpending: 0))
+        XCTAssertFalse(feed.live, "a stalled cache must not validate an old frame")
+    }
+
+    func testVideoCachePressureWarning() {
+        XCTAssertTrue(BoardStatus(gop: 3_200_000, vwait: 0).videoCachePressure)
+        XCTAssertFalse(BoardStatus(gop: 1_000_000, vwait: 0).videoCachePressure)
+        XCTAssertFalse(BoardStatus(gop: 3_900_000, vwait: 1).videoCachePressure,
+                       "already unanchored: this is a stall, not a pre-warning")
+        XCTAssertTrue(BoardStatus(gop: 3_200_000, gopcap: 4 << 20, vwait: 0).videoCachePressure)
+        XCTAssertFalse(BoardStatus(gop: 3_200_000, gopcap: 8 << 20, vwait: 0).videoCachePressure)
+        let merged = BoardStatus(gop: 3_300_000, gopcap: 4 << 20).merged(with: BoardStatus(vover: 3))
+        XCTAssertEqual(merged.gopcap, 4 << 20)
+        XCTAssertEqual(merged.gop, 3_300_000)
+    }
+
     @MainActor func testReconnectAndLinkLossDoNotExposeAnOldFrameAsLive() {
         let feed = VideoFeed()
         let device = FakeDevice()

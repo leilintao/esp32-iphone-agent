@@ -224,11 +224,12 @@ import UIKit
     private func logStatus(_ s: BoardStatus) {
         let line = "board status: ap \(s.ap ?? "-") usb \(s.usb ?? "-") sta \(s.sta.map(String.init) ?? "-")"
             + " screen \(s.w.map(String.init) ?? "-")x\(s.h.map(String.init) ?? "-") rst \(s.rst ?? "-")"
-            + " video waitIDR \(s.vwait ?? -1) overflow \(s.vover ?? -1) oversized \(s.vlarge ?? -1)"
+            + " video waitIDR \(s.vwait ?? -1) liveTail \(s.vcont ?? -1)"
+            + " overflow \(s.vover ?? -1) oversized \(s.vlarge ?? -1)"
         guard line != lastStatus else { return }
         lastStatus = line
         DebugLog.write(line)
-        DebugLog.write("video: last accepted frame age \(s.vage ?? -1) ms; GOP \(s.gop ?? -1) bytes")
+        DebugLog.write("video: last accepted frame age \(s.vage ?? -1) ms; GOP \(s.gop ?? -1)/\(s.gopcap ?? -1) bytes")
         if let up = s.up, up < 30_000 {  // a link drop that is really the board rebooting (crash, brownout, ...)
             DebugLog.write("board: booted \(up / 1000) s ago (reset: \(s.rst ?? "?"), heap \((s.heap ?? 0) / 1024) KB)")
         }

@@ -34,6 +34,13 @@ static uint32_t txGen = UINT32_MAX;
 static int nextAu;
 static vchunk pending;
 static bool pendingAu;
+// Which live AU the decoder has completely received. Guarded by `lock`: the mirror task
+// compares it with the cache before restarting an overflowing GOP.
+static bool hasSent;
+static uint32_t sentGen = UINT32_MAX;
+static int sentN = -1;
+static int pendingIdx = -1;   // index of the AU being chunked (not config)
+static uint32_t pendingGen;
 static std::atomic<uint32_t> lastTxMs, txLeft;
 static const uint32_t SNAP_BUDGET_MS = 20000;
 
@@ -80,6 +87,28 @@ static bool snapshot(uint32_t *gen, int *n, uint8_t *cfg, size_t *cfg_len, uint3
   return *n > 0 && *cfg_len > 0;
 }
 
+struct StreamView {
+  uint32_t gen, cfg_ts;
+  size_t cfg_len;
+  int n;
+  bool wait_idr, live_continue;
+};
+
+// Unlike a snapshot, a live decoder may keep consuming a cache that lost its IDR,
+// because gop_push only allows that when its reference chain stayed intact.
+static bool streamView(StreamView *v, uint8_t *cfg) {
+  xSemaphoreTake(lock, portMAX_DELAY);
+  v->gen = gop.gen;
+  v->n = gop.n;
+  v->cfg_len = gop.cfg_len;
+  v->cfg_ts = gop.cfg_ts;
+  v->wait_idr = gop.wait_idr;
+  v->live_continue = gop.live_continue;
+  memcpy(cfg, gop.cfg, gop.cfg_len);
+  xSemaphoreGive(lock);
+  return v->n > 0 && v->cfg_len > 0 && (!v->wait_idr || v->live_continue);
+}
+
 static String doSnap() {
   static uint8_t cfg[GOP_CFG_MAX];
   if (!ble_video_room()) return "err video not subscribed";
@@ -111,6 +140,11 @@ static String doSnap() {
       txGen = gen;
       nextAu = n;
       lastTxMs = finalTs;
+      xSemaphoreTake(lock, portMAX_DELAY);
+      hasSent = true;
+      sentGen = gen;
+      sentN = n - 1;
+      xSemaphoreGive(lock);
       return "ok";
     }  // else a new IDR replaced the GOP mid-send: start over with it
     if (millis() - started >= SNAP_BUDGET_MS) return "err video transfer exceeded 20s";
@@ -147,6 +181,13 @@ static void streamStep() {
     txGen = UINT32_MAX;
     pendingAu = false;
     txLeft = 0;
+    // A (re)subscribed decoder starts empty, so it can only begin at an IDR.
+    xSemaphoreTake(lock, portMAX_DELAY);
+    hasSent = false;
+    sentGen = UINT32_MAX;
+    sentN = -1;
+    gop.live_continue = false;  // an unanchored tail can only serve the decoder that was already warm
+    xSemaphoreGive(lock);
   }
   if (!ble_video_room()) {
     txGen = UINT32_MAX;  // resend config + whole GOP when streaming resumes
@@ -155,27 +196,41 @@ static void streamStep() {
     return;
   }
   if (!streaming) return;  // resume at the same AU; a real reconnect changes the epoch above
-  uint32_t gen, cfg_ts;
-  size_t cfg_len;
-  int n;
-  if (!snapshot(&gen, &n, cfg, &cfg_len, &cfg_ts)) {
+  StreamView v;
+  if (!streamView(&v, cfg)) {
     txGen = UINT32_MAX;
     pendingAu = false;
     txLeft = 0;
     return;
   }
+  const uint32_t gen = v.gen;
+  const int n = v.n;
   if (gen != txGen) {
     txGen = gen;
     nextAu = 0;
-    // scratch also holds config: unlike a loop-local cfg it survives across task iterations.
-    memcpy(scratch, cfg, cfg_len);
-    vchunk_begin(&pending, scratch, cfg_len, VF_CONFIG, cfg_ts);
-    pendingAu = true;
+    pendingIdx = -1;
+    if (v.wait_idr) {
+      // The cache lost its IDR. Only a decoder that had consumed everything before the
+      // restart may continue; a new or lagging one must wait for the next IDR.
+      if (!v.live_continue || !hasSent) {
+        pendingAu = false;
+        txLeft = 0;
+        return;
+      }
+      pendingAu = false;  // continue straight with AU 0, without repeating SPS/PPS
+    } else {
+      // scratch also holds config: unlike a loop-local cfg it survives across task iterations.
+      memcpy(scratch, cfg, v.cfg_len);
+      vchunk_begin(&pending, scratch, v.cfg_len, VF_CONFIG, v.cfg_ts);
+      pendingAu = true;
+    }
   }
   if (!pendingAu) {
     if (nextAu >= n) return;
     gop_au au;
     if (!copyAu(gen, nextAu, &au)) { txGen = UINT32_MAX; return; }
+    pendingIdx = nextAu;
+    pendingGen = gen;
     nextAu++;
     vchunk_begin(&pending, scratch, au.len, au.idr ? VF_IDR : 0, au.ts);
     pendingAu = true;
@@ -189,7 +244,15 @@ static void streamStep() {
     if (!result) { pendingAu = false; break; }
     if (result < 0) break;  // keep this exact AU/chunk; don't replay minutes of history
     if (chunk[2] & VF_END) {
-      if (!(pending.flags & VF_CONFIG)) lastTxMs = pending.ts;
+      if (!(pending.flags & VF_CONFIG)) {
+        lastTxMs = pending.ts;
+        // Only a completely delivered AU advances the decoder's reference point.
+        xSemaphoreTake(lock, portMAX_DELAY);
+        hasSent = true;
+        sentGen = pendingGen;
+        sentN = pendingIdx;
+        xSemaphoreGive(lock);
+      }
       pendingAu = false;
       break;
     }
@@ -205,6 +268,15 @@ static void videoTask(void *) {
       pendingAu = false;
       txLeft = 0;
       txGen = UINT32_MAX;
+      if (!r.bench) {
+        // A snapshot replaces live delivery; until it completes we cannot promise the
+        // decoder a continuity for an unanchored GOP.
+        xSemaphoreTake(lock, portMAX_DELAY);
+        hasSent = false;
+        sentGen = UINT32_MAX;
+        sentN = -1;
+        xSemaphoreGive(lock);
+      }
       String reply = String(r.id) + " " + (r.bench ? doBench(r.kb) : doSnap());
 #if AGENT_DEBUG_SERIAL
       Serial.println("video: " + reply);  // the reply only goes over BLE; mirror it for serial-driven tests
@@ -258,8 +330,12 @@ void video_on_au(const uint8_t *au, size_t len, bool idr) {
     gop.n = 0;
     gop.gen++;
     gop.wait_idr = true;
-  } else if (gop_push(&gop, au, len, idr, now) >= 0) {
-    lastAccepted = now;
+    gop.live_continue = false;
+  } else {
+    // Every buffered AU was already delivered: a restart at this AU keeps the decoder's
+    // reference chain intact even though the cache loses its IDR anchor.
+    bool live_synced = hasSent && sentGen == gop.gen && gop.n > 0 && sentN == gop.n - 1;
+    if (gop_push(&gop, au, len, idr, now, live_synced) >= 0) lastAccepted = now;
   }
   xSemaphoreGive(lock);
   xTaskNotifyGive(task);
@@ -281,11 +357,12 @@ VideoStats video_stats() {
   xSemaphoreTake(lock, portMAX_DELAY);
   uint32_t gopBytes = gop.used;
   uint32_t overflow = gop.overflows, large = oversized;
-  bool waiting = gop.wait_idr;
+  bool waiting = gop.wait_idr, live = gop.live_continue;
   uint32_t age = lastAccepted ? millis() - lastAccepted : UINT32_MAX;
   xSemaphoreGive(lock);
   const uint32_t sentAt = lastTxMs.load();
-  return {fresh ? statKbps : 0, statIdrMs, gopBytes, fresh && !waiting ? statFps : 0,
-          overflow, age, large, waiting,
+  return {fresh ? statKbps : 0, statIdrMs, gopBytes, (uint32_t)GOP_CAP,
+          fresh && (!waiting || live) ? statFps : 0,
+          overflow, age, large, waiting, live,
           sentAt ? millis() - sentAt : UINT32_MAX, txLeft.load()};
 }

@@ -31,9 +31,21 @@ struct DiagnosticsView: View {
                 row("AirPlay kbps", f(board.status?.kbps))
                 row("AirPlay fps", f(board.status?.fps, "%.1f"))
                 row("IDR interval (board / app)", "\(board.status?.idr.map { "\($0) ms" } ?? "–") / \(f(metrics.idrIntervalMs)) ms")
-                row("GOP buffered", board.status?.gop.map { "\($0 / 1024) KB" } ?? "–")
-                row("Waiting keyframe", board.status?.vwait.map { $0 == 1 ? "Yes — restart mirroring" : "No" } ?? "–")
+                row("GOP buffered", board.status.map { s in
+                    let used = s.gop ?? 0, cap = s.gopcap ?? BoardStatus.gopCapFallback
+                    let pct = Int(((s.gopUsage ?? 0) * 100).rounded())
+                    return "\(used / 1024) / \(cap / 1024) KB (\(pct)%)"
+                } ?? "–")
+                row("Waiting keyframe", board.status?.vwait.map { waiting in
+                    guard waiting == 1 else { return "No" }
+                    return board.status?.vcont == 1 ? "No anchor — live tail continues" : "Yes — restart mirroring"
+                } ?? "–")
                 row("Video cache overflows", board.status?.vover.map(String.init) ?? "–")
+                if board.status?.videoCachePressure == true {
+                    Label("Cache over 75% full. Restart Screen Mirroring before it stalls a new snapshot.",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption).foregroundStyle(Palette.warning)
+                }
                 row("Oversized video frames", board.status?.vlarge.map(String.init) ?? "–")
                 row("Board frame age", board.status?.vage.map { "\($0) ms" } ?? "–")
                 row("Displayed frame age", feed.frame == nil ? "–" : String(format: "%.1f s", now() - feed.capturedAt))
