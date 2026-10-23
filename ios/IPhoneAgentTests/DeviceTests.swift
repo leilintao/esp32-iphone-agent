@@ -30,6 +30,57 @@ import XCTest
                              CommandChannel.timeout("type hi"))
     }
 
+    func testOrthogonalMoveTimeoutIncludesBothAxesAndSigns() {
+        XCTAssertEqual(CommandChannel.timeout("move 800 -1200"), 8, accuracy: 1e-9)
+        XCTAssertEqual(CommandChannel.timeout("move 800 -1200"), CommandChannel.timeout("move -800 1200"))
+        XCTAssertGreaterThan(CommandChannel.timeout("move 800 1200"), CommandChannel.timeout("move 0 1200"))
+    }
+
+    func testCalibrationSuppressesNudgesButRetainsHeartbeat() async {
+        let board = FakeBoard()
+        let channel = CommandChannel(transport: board)
+        board.channel = channel
+        channel.linkUp()
+        let job = Task { await channel.keepAwake(idle: 0, heartbeat: 0.01, screenLive: { false }) }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        job.cancel()
+        await job.value
+        let commands = board.lines.map { String($0.split(separator: " ", maxSplits: 1)[1]) }
+        XCTAssertFalse(commands.isEmpty)
+        XCTAssertTrue(commands.allSatisfy { $0 == "ping" }, "calibration must not receive keep-awake pointer motion")
+    }
+
+    func testNormalIdleModeStillNudgesInBothDirections() async {
+        let board = FakeBoard()
+        let channel = CommandChannel(transport: board)
+        board.channel = channel
+        channel.linkUp()
+        let job = Task { await channel.keepAwake(idle: 0, heartbeat: 0.01, screenLive: { true }) }
+        let deadline = now() + 1
+        while board.lines.count < 2 && now() < deadline { try? await Task.sleep(nanoseconds: 10_000_000) }
+        job.cancel()
+        await job.value
+        let commands = board.lines.map { String($0.split(separator: " ", maxSplits: 1)[1]) }
+        XCTAssertTrue(commands.contains("move 1 0"))
+        XCTAssertTrue(commands.contains("move -1 0"))
+    }
+
+    func testManualSeedIsOnlyRoughUntilOffsetIsFitted() throws {
+        let u = Double(Pointer.calibrationMove)
+        let slope = 1.0 / 1600, offset = 0.04
+        let seed = u * slope + offset
+        let rough = try XCTUnwrap(ProbeFit.throughHome((u, seed)))
+        let samples = [0.25, 0.5, 0.75].map { target -> (Double, Double) in
+            let units = Double(rough.units(for: target))
+            return (units, slope * units + offset)
+        }
+        let fit = try XCTUnwrap(ProbeFit.line([(u, seed)] + samples))
+        XCTAssertEqual(fit.a, slope, accuracy: 1e-9)
+        XCTAssertEqual(fit.b, offset, accuracy: 1e-9)
+        XCTAssertEqual(slope * Double(fit.units(for: 0.62)) + offset, 0.62, accuracy: slope)
+        XCTAssertGreaterThan(abs(slope * Double(rough.units(for: 0.62)) + offset - 0.62), 0.05)
+    }
+
     func testSendWithoutBoardFailsFast() async {
         do {
             try await CommandChannel().send("ping")

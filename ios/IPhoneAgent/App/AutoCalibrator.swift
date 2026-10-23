@@ -246,7 +246,7 @@ import UIKit
                     app.say(String(format: "calibration: tapped the pointer at (%.3f, %.3f)", p.x, p.y))
                     app.pointer.finishCalibration(x: p.x, y: p.y)
                     do {
-                        switch try await touchCalibrate(full: false) {
+                        switch try await touchCalibrate(full: false, manualSeed: p) {
                         case .done(let error): finished(error)
                         case .noTaps: failed(Self.noTapsText)
                         case .failed(let why): failed(why)

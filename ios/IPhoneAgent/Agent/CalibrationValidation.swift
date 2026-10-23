@@ -2,7 +2,7 @@ import Foundation
 
 /// Independent checks, not fitting samples. Include the lower keypad and both sides of the screen.
 struct CalibrationValidation {
-    static let version = 1
+    static let version = 2  // orthogonal-motion firmware requires a new mapping, not a legacy verified span
     static let tolerance = 0.015
     static let targets = [CGPoint(x: 0.5, y: 0.62), CGPoint(x: 0.15, y: 0.78),
                           CGPoint(x: 0.85, y: 0.78), CGPoint(x: 0.5, y: 0.3)]

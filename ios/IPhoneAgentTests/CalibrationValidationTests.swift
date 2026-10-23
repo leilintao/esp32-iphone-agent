@@ -62,6 +62,14 @@ final class CalibrationValidationTests: XCTestCase {
 @MainActor final class CalibrationPersistenceTests: XCTestCase {
     private func makePointer(_ file: URL) -> Pointer { Pointer(device: FakeDevice(), calibrationFile: file) }
 
+    func testDiagonalFirmwareVerificationDoesNotAuthorizeOrthogonalFirmware() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        try Data(#"{"w":773,"h":1644,"quality":0.008,"verificationVersion":1}"#.utf8).write(to: file)
+        XCTAssertTrue(makePointer(file).calibrated)
+        XCTAssertFalse(makePointer(file).verified)
+    }
+
     func testOldSavedCalibrationDoesNotAuthorizeNewRuns() throws {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: file) }

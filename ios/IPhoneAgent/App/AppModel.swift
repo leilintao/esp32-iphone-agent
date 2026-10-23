@@ -106,7 +106,11 @@ import UIKit
             try await board.commands.send("key cmd+v")
         }
         DebugLog.relay = { [weak self] line in
-            MainActor.assumeIsolated { if !MockMode.on { self?.board.commands.relayLog(line) } }
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { if !MockMode.on { self?.board.commands.relayLog(line) } }
+            } else {
+                Task { @MainActor [weak self] in if !MockMode.on { self?.board.commands.relayLog(line) } }
+            }
         }
         board.commands.onAppCommand = { [weak self] line in self?.handleAppCommand(line) }
         DebugLog.write("app launched \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") ?? "")"
@@ -145,7 +149,12 @@ import UIKit
         notifier.onAction = { [weak self] action, run in self?.notificationAction(action, run: run) }
         wireRecovery()
 
-        timers.append(Task { [weak self] in await self?.board.commands.keepAwake(screenLive: { self?.feed.live ?? false }) })
+        timers.append(Task { [weak self] in
+            await self?.board.commands.keepAwake(screenLive: {
+                guard let self else { return false }
+                return self.feed.live && !self.calibrator.boardOpen
+            })
+        })
         timers.append(Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)

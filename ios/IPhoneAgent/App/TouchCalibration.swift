@@ -12,9 +12,10 @@ extension AutoCalibrator {
     static let check = (x: 0.5, y: 0.62)
     static let tapTimeout = 3.0
 
-    func touchCalibrate(full: Bool) async throws -> TouchResult {
+    func touchCalibrate(full: Bool, manualSeed: CGPoint? = nil) async throws -> TouchResult {
         let probe = app.probe, device = app.board.commands, pointer = app.pointer
-        var total = (full ? Self.roughStops.count + Self.targets.count : 0) + CalibrationValidation.checkCount
+        let runStage2 = full || manualSeed != nil
+        var total = (full ? Self.roughStops.count : 0) + (runStage2 ? Self.targets.count : 0) + CalibrationValidation.checkCount
         var clicks = 0, hits = 0
         phase = .homing
         try await pointer.reset()
@@ -96,7 +97,7 @@ extension AutoCalibrator {
             return .done(validation.worstError)
         }
 
-        if !full {
+        if !runStage2 {
             guard pointer.calibrated else { return .failed("not calibrated") }
             return try await validate()
         }
@@ -113,13 +114,17 @@ extension AutoCalibrator {
             return (x, y)
         }
 
-        // stage 1: rough, on the diagonal
-        phase = .probeA
-        for u in Self.roughStops {
-            let p = try await click(u, u)
-            if p == nil && hits == 0 { return .noTaps }
-            if p == nil { _ = try? await device.send("key esc") }  // no fit yet to place the spot or an empty click
-            record(u, u, p)
+        if full {
+            // stage 1: rough, on the diagonal
+            phase = .probeA
+            for u in Self.roughStops {
+                let p = try await click(u, u)
+                if p == nil && hits == 0 { return .noTaps }
+                if p == nil { _ = try? await device.send("key esc") }  // no fit yet to place the spot or an empty click
+                record(u, u, p)
+            }
+        } else if let seed = manualSeed {
+            record(Pointer.calibrationMove, Pointer.calibrationMove, seed)
         }
         guard let rough = lines() else { return .failed("probe taps stuck at the screen edge") }
 

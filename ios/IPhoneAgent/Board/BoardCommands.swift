@@ -98,13 +98,13 @@ extension BoardTransport {
         return connected
     }
 
-    /// Seconds the board may take: replies need up to ~2 s at p99, moves are paced (10 units per 8 ms),
+    /// Seconds the board may take: replies need up to ~2 s at p99, moves pace each axis at 8 units per 8 ms,
     /// typing is per character.
     nonisolated static func timeout(_ command: String) -> Double {
         let parts = command.split(separator: " ", maxSplits: 1).map(String.init)
         let name = parts.first ?? "", arg = parts.count > 1 ? parts[1] : ""
         switch name {
-        case "move": return 5 + Double(arg.split(separator: " ").compactMap { Int($0) }.map(abs).max() ?? 0) / 10 * 0.012
+        case "move": return 5 + Double(arg.split(separator: " ").compactMap { Int($0) }.map(abs).reduce(0, +)) / 8 * 0.012
         case "type": return 5 + 0.1 * Double(arg.count)
         case "ping": return 8  // an idle check: tolerate a hiccup rather than drop a healthy board
         case "snap": return 15  // a whole GOP over BLE
